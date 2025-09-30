@@ -87,14 +87,13 @@ jobs:
                     git push origin "$TAG"
                   fi
 
-            - name: Move downloaded exe to repo root
+            - name: Verify exe presence
               run: |
-                  ARTIFACT_DIR="transposer2025-windows-exe"
-                  if [ -f "$ARTIFACT_DIR/transposer2025.exe" ]; then
-                    mv "$ARTIFACT_DIR/transposer2025.exe" ./transposer2025.exe
+                  if [ -f "transposer2025.exe" ]; then
+                    echo "Found transposer2025.exe in root"
                   else
-                    echo "Expected exe not found in $ARTIFACT_DIR" >&2
-                    ls -la "$ARTIFACT_DIR" || true
+                    echo "Expected exe not found" >&2
+                    ls -la
                     exit 1
                   fi
 
