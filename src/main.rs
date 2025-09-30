@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::io::{stdin, stdout, Write};
+// no direct stdin/stdout usage here; stdin is handled by `stdin_handler.rs`
 use std::sync::mpsc::channel;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
@@ -36,7 +36,6 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let mut input = String::new();
     // Using global constants INPUT_PORT_NAME_SUBSTR and OUTPUT_PORT_NAME_SUBSTR
 
     let mut midi_in = MidiInput::new("midir reading input")?;
@@ -65,13 +64,10 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     // Resolve output port name before connecting (connect takes ownership of midi_out)
     let out_port_name = midi_out.port_name(out_port)?;
-    // Ask user for initial transpose amount (in semitones)
-    print!("Transpose semitones (e.g. -12..12). Enter 0 for none: ");
-    stdout().flush()?;
-    input.clear();
-    stdin().read_line(&mut input)?;
-    let initial_transpose: i32 = input.trim().parse::<i32>().unwrap_or(0);
-    println!("Using initial transpose: {} semitones", initial_transpose);
+    // Use default initial transpose 0 so forwarding starts immediately.
+    // The spawned stdin handler thread still accepts numbers to change transpose later.
+    let initial_transpose: i32 = 0;
+    println!("Using initial transpose: {} semitones (type number+Enter to change, empty line or 'exit' to quit)", initial_transpose);
 
     // Initialize global atomics used by helper threads
     TRANSPOSE_SEMITONES.store(initial_transpose, Ordering::SeqCst);
