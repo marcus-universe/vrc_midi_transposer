@@ -1,0 +1,60 @@
+name: Windows Release Build and Draft
+
+on:
+    push:
+        branches:
+            - main
+
+permissions:
+    contents: write
+    packages: write
+    id-token: write
+
+jobs:
+    build-win:
+        name: Build on Windows and create draft release
+        runs-on: windows-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Set up Rust
+              uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+                  profile: minimal
+                  override: true
+
+            - name: Install required MSVC components
+              shell: pwsh
+              run: |
+                  echo "Visual Studio components are available on windows-latest runner"
+
+            - name: Build release
+              shell: pwsh
+              run: |
+                  cargo build --release
+
+            - name: Upload exe artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: transposer2025-windows-exe
+                  path: target\release\transposer2025.exe
+
+    release:
+        name: Create Release Draft and attach exe
+        needs: build-win
+        runs-on: ubuntu-latest
+        steps:
+            - name: Download exe artifact
+              uses: actions/download-artifact@v4
+              with:
+                  name: transposer2025-windows-exe
+
+            - name: Create draft release
+              id: create_release
+              uses: softprops/action-gh-release@v1
+              with:
+                  files: transposer2025.exe
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

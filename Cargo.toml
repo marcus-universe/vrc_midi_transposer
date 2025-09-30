@@ -8,3 +8,6 @@ midir = "0.10.2"
 async-osc = "0.2.0"
 tokio = { version = "1.47.1", features = ["full"] }
 async-std = "1.13.0"
+
+[build-dependencies]
+winres = "0.1.12"
