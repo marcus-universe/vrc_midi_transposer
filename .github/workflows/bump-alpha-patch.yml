@@ -1,0 +1,25 @@
+name: Bump Alpha Patch Version
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump-alpha:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make bump script executable
+        run: chmod +x .github/scripts/bump_alpha_patch.sh
+
+      - name: Run bump_alpha_patch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          .github/scripts/bump_alpha_patch.sh
