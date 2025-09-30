@@ -1,8 +1,3 @@
-# Windows build and release workflow
-# Builds the release exe on Windows, uploads it as an artifact, then creates
-# (or reuses) a tag based on Cargo.toml version and creates a draft release
-# attaching the built exe.
-
 name: Windows Release Build and Draft
 
 on:
@@ -70,7 +65,7 @@ jobs:
                     exit 0
                   fi
 
-                  # Otherwise extract version from Cargo.toml and create a tag like v0.1.0
+                  # Otherwise extract version from Cargo.toml
                   version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
                   if [ -z "$version" ]; then
                     echo "version not found in Cargo.toml" >&2
@@ -82,105 +77,32 @@ jobs:
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
-                  # Windows build and release workflow
-                  # Builds the release exe on Windows, uploads it as an artifact, then creates
-                  # (or reuses) a tag based on Cargo.toml version and creates a draft release
-                  # attaching the built exe.
+                  TAG=${{ steps.get_version.outputs.tag }}
+                  if git rev-parse "$TAG" >/dev/null 2>&1; then
+                    echo "Tag $TAG already exists"
+                  else
+                    git config user.name "github-actions[bot]"
+                    git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                    git tag -a "$TAG" -m "Release $TAG"
+                    git push origin "$TAG"
+                  fi
 
-                  name: Windows Release Build and Draft
+            - name: Move downloaded exe to repo root
+              run: |
+                  ARTIFACT_DIR="transposer2025-windows-exe"
+                  if [ -f "$ARTIFACT_DIR/transposer2025.exe" ]; then
+                    mv "$ARTIFACT_DIR/transposer2025.exe" ./transposer2025.exe
+                  else
+                    echo "Expected exe not found in $ARTIFACT_DIR" >&2
+                    ls -la "$ARTIFACT_DIR" || true
+                    exit 1
+                  fi
 
-                  on:
-                    push:
-                      branches:
-                        - main
-
-                  permissions:
-                    contents: write
-                    packages: write
-                    id-token: write
-
-                  jobs:
-                    build-win:
-                      name: Build on Windows and create draft release
-                      runs-on: windows-latest
-                      steps:
-                        - name: Checkout
-                          uses: actions/checkout@v4
-
-                        - name: Set up Rust
-                          uses: actions-rs/toolchain@v1
-                          with:
-                            toolchain: stable
-                            profile: minimal
-                            override: true
-
-                        - name: Build release
-                          shell: pwsh
-                          run: |
-                            cargo build --release
-
-                        - name: Upload exe artifact
-                          uses: actions/upload-artifact@v4
-                          with:
-                            name: transposer2025-windows-exe
-                            path: target\release\transposer2025.exe
-
-                    release:
-                      name: Create Release Draft and attach exe
-                      needs: build-win
-                      runs-on: ubuntu-latest
-                      steps:
-                        - name: Download exe artifact
-                          uses: actions/download-artifact@v4
-                          with:
-                            name: transposer2025-windows-exe
-
-                        - name: Checkout
-                          uses: actions/checkout@v4
-                          with:
-                            fetch-depth: 0
-
-                        - name: Determine version
-                          id: get_version
-                          run: |
-                            # Extract version from Cargo.toml and create a tag string like v0.1.0
-                            version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-                            if [ -z "$version" ]; then
-                              echo "version not found in Cargo.toml" >&2
-                              exit 1
-                            fi
-                            echo "tag=v$version" >> $GITHUB_OUTPUT
-
-                        - name: Create tag if absent
-                          env:
-                            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                          run: |
-                            TAG=${{ steps.get_version.outputs.tag }}
-                            if git rev-parse "$TAG" >/dev/null 2>&1; then
-                              echo "Tag $TAG already exists"
-                            else
-                              git config user.name "github-actions[bot]"
-                              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-                              git tag -a "$TAG" -m "Release $TAG"
-                              git push origin "$TAG"
-                            fi
-
-                        - name: Move downloaded exe to repo root
-                          run: |
-                            ARTIFACT_DIR="transposer2025-windows-exe"
-                            if [ -f "$ARTIFACT_DIR/transposer2025.exe" ]; then
-                              mv "$ARTIFACT_DIR/transposer2025.exe" ./transposer2025.exe
-                            else
-                              echo "Expected exe not found in $ARTIFACT_DIR" >&2
-                              ls -la "$ARTIFACT_DIR" || true
-                              exit 1
-                            fi
-
-                        - name: Create draft release
-                          id: create_release
-                          uses: softprops/action-gh-release@v1
-                          with:
-                            tag_name: ${{ steps.get_version.outputs.tag }}
-                            files: transposer2025.exe
-                          env:
-                            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Create draft release
+              id: create_release
+              uses: softprops/action-gh-release@v1
+              with:
+                  tag_name: ${{ steps.get_version.outputs.tag }}
+                  files: transposer2025.exe
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
