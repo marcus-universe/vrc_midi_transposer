@@ -1,1 +1,12 @@
 /target
+
+# Ignore credentials
+mqtt_credentials.json
+
+# Windows build artifacts
+**/*.pdb
+**/*.d
+**/*.exe
+
+# VS Code
+.vscode/

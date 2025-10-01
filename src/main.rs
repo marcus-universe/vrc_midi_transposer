@@ -14,6 +14,7 @@ mod forwarder;
 mod stdin_handler;
 mod osc_listener;
 mod osc_sender;
+mod mqtt_listener;
 
 // ---------------------------------------------------------------------------
 // Configuration: edit these if you want to change the default port selection
@@ -24,7 +25,7 @@ const OUTPUT_PORT_NAME_SUBSTR: &str = "MIDIOUT7 (MRCC)";
 // ---------------------------------------------------------------------------
 // OSC configuration (address and paths)
 // ---------------------------------------------------------------------------
-pub const OSC_LISTENING_ADDR: &str = "192.168.50.78:9069";
+pub const OSC_LISTENING_ADDR: &str = "127.0.0.1:9069";
 pub const OSC_TRANSPOSE_PATH: &str = "/transpose";
 pub const OSC_TRANSPOSE_UP_PATH: &str = "/transposeUp";
 pub const OSC_TRANSPOSE_DOWN_PATH: &str = "/transposeDown";
@@ -32,6 +33,59 @@ pub const OSC_TRANSPOSE_DOWN_PATH: &str = "/transposeDown";
 // OSC sending configuration
 pub const OSC_SENDING_ADDR: &str = "127.0.0.1";
 pub const OSC_SENDING_PORT: u16 = 9000;
+
+// ---------------------------------------------------------------------------
+// MQTT configuration
+// ---------------------------------------------------------------------------
+pub const MQTT_BROKER_HOST: &str = "192.168.50.200"; // Home Assistant broker
+pub const MQTT_BROKER_PORT: u16 = 1883;
+pub const MQTT_BASE_TOPIC: &str = "midi_transposer"; // base topic
+// Defaults intentionally left blank to avoid leaking credentials in VCS.
+// Provide credentials via mqtt_credentials.json.
+pub const MQTT_USERNAME: &str = "";
+pub const MQTT_PASSWORD: &str = "";
+
+// Runtime-loaded credentials from mqtt_credentials.json (optional override)
+#[derive(Debug, serde::Deserialize)]
+struct MqttCredentialsFile {
+    username: Option<String>,
+    password: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MqttCredentials {
+    pub username: String,
+    pub password: String,
+}
+
+fn load_mqtt_credentials() -> MqttCredentials {
+    let defaults = MqttCredentials {
+        username: MQTT_USERNAME.to_string(),
+        password: MQTT_PASSWORD.to_string(),
+    };
+
+    let path = std::path::Path::new("mqtt_credentials.json");
+    if !path.exists() {
+        eprintln!("[MQTT] mqtt_credentials.json not found; using empty defaults (authentication may fail)");
+        return defaults;
+    }
+    match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str::<MqttCredentialsFile>(&text) {
+            Ok(file) => MqttCredentials {
+                username: file.username.unwrap_or(defaults.username),
+                password: file.password.unwrap_or(defaults.password),
+            },
+            Err(err) => {
+                eprintln!("[MQTT] Failed to parse mqtt_credentials.json: {} (using defaults)", err);
+                defaults
+            }
+        },
+        Err(err) => {
+            eprintln!("[MQTT] Failed to read mqtt_credentials.json: {} (using defaults)", err);
+            defaults
+        }
+    }
+}
 
 // Optional lowercase aliases for ergonomic access where desired
 pub use OSC_LISTENING_ADDR as osc_listening_addr;
@@ -52,7 +106,7 @@ static EXIT_FLAG: AtomicBool = AtomicBool::new(false);
 static OSC_SENDING_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Send original input MIDI (true) or transposed MIDI (false) via OSC
-static OSC_SEND_ORIGINAL: AtomicBool = AtomicBool::new(true);
+pub static OSC_SEND_ORIGINAL: AtomicBool = AtomicBool::new(true);
 
 fn main() {
     match run() {
@@ -143,6 +197,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Spawn OSC listener on UDP port 9069 (updates TRANSPOSE_SEMITONES on /transpose)
     let osc_handle = osc_listener::spawn_osc_listener();
 
+    // Spawn MQTT listener (updates TRANSPOSE_SEMITONES via MQTT topics)
+    let mqtt_handle = mqtt_listener::spawn_mqtt_listener();
+
     // Spawn OSC sender threads for both original and transposed MIDI
     let osc_target_addr = format!("{}:{}", OSC_SENDING_ADDR, OSC_SENDING_PORT);
     let osc_original_handle = osc_sender::spawn_osc_sender(
@@ -170,6 +227,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let _ = osc_handle.join();
     let _ = osc_original_handle.join();
     let _ = osc_transposed_handle.join();
+    let _ = mqtt_handle.join();
 
     Ok(())
 }
