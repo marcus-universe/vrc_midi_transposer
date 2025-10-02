@@ -2,6 +2,12 @@
 
 <p align="center">
   <img src="./docs/assets/icon_wide.png" alt="VRC_Midi_Transposer Icon Wide" width="600"/>
+  <br>
+  <img src="https://img.shields.io/github/license/marcus-universe/vrc_midi_transposer.svg" />
+  <img src="https://img.shields.io/github/stars/marcus-universe/vrc_midi_transposer?style=flat
+.svg" />
+  <img src="https://img.shields.io/badge/lang-rust-orange
+.svg" />
 </p>
 
 <p align="center">
@@ -19,9 +25,11 @@ VRC_Midi_Transposer is a fast Rust application designed to transpose MIDI signal
 - 🔄 **Live Control** - Change transpose settings on-the-fly without stopping playback
 - 🛠️ **Configurable** - Comprehensive JSON-based configuration system
 
+<img src="./docs/assets/showcase.gif" alt="VRC_Midi_Transposer Screenshot" width="600"/>
+
 ## Quick Start
 
-1. Download the latest release or compile from source
+1. [Download the latest release](https://github.com/marcus-universe/vrc_midi_transposer/releases) or compile from source
 2. Place the `VRC-Midi-Transposer.exe` and `config.json` in the same folder
 3. Configure your MIDI ports and control settings in `config.json` (see [CONFIG.md](docs/CONFIG.md) for details)
 4. Run the executable: `VRC-Midi-Transposer.exe`
