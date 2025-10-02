@@ -71,8 +71,8 @@ For VRChat avatar integration see [VRChat Avatar Integration](docs/AVATAR_SETUP.
 1. Install Rust: https://rustup.rs/
 2. Clone this repository:
    ```bash
-   git clone https://github.com/marcus-universe/MidiTransposer.git
-   cd MidiTransposer
+   git clone https://github.com/marcus-universe/vrc_midi_transposer.git
+   cd vrc_midi_transposer
    ```
 
 ### Build Commands
