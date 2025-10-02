@@ -2,6 +2,7 @@
 
 # Ignore credentials
 mqtt_credentials.json
+config.json
 
 # Windows build artifacts
 **/*.pdb

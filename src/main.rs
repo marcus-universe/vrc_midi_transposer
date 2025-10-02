@@ -7,49 +7,80 @@ use std::time::Duration;
 
 use midir::{Ignore, MidiInput, MidiOutput};
 
-mod input;
-mod output;
-mod transpose;
-mod forwarder;
-mod stdin_handler;
-mod osc_listener;
-mod osc_sender;
-mod mqtt_listener;
+mod io;
+mod remote;
+mod general;
+
+// Re-export renamed modules to keep existing `crate::input` etc. references working
+pub use io::input;
+pub use io::output;
+pub use general::stdin_handler;
+pub use general::transpose;
+pub use remote::osc_listener;
+pub use remote::osc_sender;
+pub use remote::mqtt_listener;
+pub use general::forwarder;
 
 // ---------------------------------------------------------------------------
-// Configuration: edit these if you want to change the default port selection
+// Configuration structure loaded from config.json
 // ---------------------------------------------------------------------------
-const INPUT_PORT_NAME_SUBSTR: &str = "MRCC";
-const OUTPUT_PORT_NAME_SUBSTR: &str = "MIDIOUT7 (MRCC)";
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct Config {
+    pub midi: MidiConfig,
+    pub osc: OscConfig,
+    pub mqtt: MqttConfig,
+    pub transpose: TransposeConfig,
+}
 
-// ---------------------------------------------------------------------------
-// OSC configuration (address and paths)
-// ---------------------------------------------------------------------------
-pub const OSC_LISTENING_ADDR: &str = "127.0.0.1:9069";
-pub const OSC_TRANSPOSE_PATH: &str = "/transpose";
-pub const OSC_TRANSPOSE_UP_PATH: &str = "/transposeUp";
-pub const OSC_TRANSPOSE_DOWN_PATH: &str = "/transposeDown";
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct MidiConfig {
+    pub input_port_name_substr: String,
+    pub output_port_name_substr: String,
+}
 
-// OSC sending configuration
-pub const OSC_SENDING_ADDR: &str = "127.0.0.1";
-pub const OSC_SENDING_PORT: u16 = 9000;
+#[derive(Debug, serde::Deserialize, Clone)]
+#[serde(default)]
+pub struct OscConfig {
+    pub listening_addr: String,
+    pub transpose_path: String,
+    pub transpose_up_path: String,
+    pub transpose_down_path: String,
+    pub sending_addr: String,
+    pub sending_port: u16,
+    // Whether OSC sending of MIDI is enabled at startup
+    pub sending_enabled: bool,
+    // Whether to send original (true) or transposed (false) MIDI via OSC at startup
+    pub send_original: bool,
+}
 
-// ---------------------------------------------------------------------------
-// MQTT configuration
-// ---------------------------------------------------------------------------
-pub const MQTT_BROKER_HOST: &str = "192.168.50.200"; // Home Assistant broker
-pub const MQTT_BROKER_PORT: u16 = 1883;
-pub const MQTT_BASE_TOPIC: &str = "midi_transposer"; // base topic
-// Defaults intentionally left blank to avoid leaking credentials in VCS.
-// Provide credentials via mqtt_credentials.json.
-pub const MQTT_USERNAME: &str = "";
-pub const MQTT_PASSWORD: &str = "";
+impl Default for OscConfig {
+    fn default() -> Self {
+        OscConfig {
+            listening_addr: "127.0.0.1:9069".to_string(),
+            transpose_path: "/transpose".to_string(),
+            transpose_up_path: "/transposeUp".to_string(),
+            transpose_down_path: "/transposeDown".to_string(),
+            sending_addr: "127.0.0.1".to_string(),
+            sending_port: 9000,
+            sending_enabled: false,
+            send_original: true,
+        }
+    }
+}
 
-// Runtime-loaded credentials from mqtt_credentials.json (optional override)
-#[derive(Debug, serde::Deserialize)]
-struct MqttCredentialsFile {
-    username: Option<String>,
-    password: Option<String>,
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct MqttConfig {
+    pub broker_host: String,
+    pub broker_port: u16,
+    pub base_topic: String,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct TransposeConfig {
+    pub min: i8,
+    pub max: i8,
 }
 
 #[derive(Debug, Clone)]
@@ -58,40 +89,60 @@ pub struct MqttCredentials {
     pub password: String,
 }
 
-fn load_mqtt_credentials() -> MqttCredentials {
-    let defaults = MqttCredentials {
-        username: MQTT_USERNAME.to_string(),
-        password: MQTT_PASSWORD.to_string(),
+fn load_config() -> Config {
+    let path = std::path::Path::new("config.json");
+    
+    // Default configuration if file doesn't exist
+    let default_config = Config {
+        midi: MidiConfig {
+            input_port_name_substr: "MRCC".to_string(),
+            output_port_name_substr: "MIDIOUT7 (MRCC)".to_string(),
+        },
+        osc: OscConfig {
+            listening_addr: "127.0.0.1:9069".to_string(),
+            transpose_path: "/transpose".to_string(),
+            transpose_up_path: "/transposeUp".to_string(),
+            transpose_down_path: "/transposeDown".to_string(),
+            sending_addr: "127.0.0.1".to_string(),
+            sending_port: 9000,
+            sending_enabled: false,
+            send_original: true,
+        },
+        mqtt: MqttConfig {
+            broker_host: "192.168.50.200".to_string(),
+            broker_port: 1883,
+            base_topic: "midi_transposer".to_string(),
+            username: "".to_string(),
+            password: "".to_string(),
+        },
+        transpose: TransposeConfig {
+            min: -24,
+            max: 24,
+        },
     };
 
-    let path = std::path::Path::new("mqtt_credentials.json");
     if !path.exists() {
-        eprintln!("[MQTT] mqtt_credentials.json not found; using empty defaults (authentication may fail)");
-        return defaults;
+        eprintln!("[CONFIG] config.json not found; using defaults");
+        return default_config;
     }
+    
     match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<MqttCredentialsFile>(&text) {
-            Ok(file) => MqttCredentials {
-                username: file.username.unwrap_or(defaults.username),
-                password: file.password.unwrap_or(defaults.password),
+        Ok(text) => match serde_json::from_str::<Config>(&text) {
+            Ok(config) => {
+                println!("[CONFIG] Loaded configuration from config.json");
+                config
             },
             Err(err) => {
-                eprintln!("[MQTT] Failed to parse mqtt_credentials.json: {} (using defaults)", err);
-                defaults
+                eprintln!("[CONFIG] Failed to parse config.json: {} (using defaults)", err);
+                default_config
             }
         },
         Err(err) => {
-            eprintln!("[MQTT] Failed to read mqtt_credentials.json: {} (using defaults)", err);
-            defaults
+            eprintln!("[CONFIG] Failed to read config.json: {} (using defaults)", err);
+            default_config
         }
     }
 }
-
-// Optional lowercase aliases for ergonomic access where desired
-pub use OSC_LISTENING_ADDR as osc_listening_addr;
-pub use OSC_TRANSPOSE_PATH as osc_transpose_path;
-pub use OSC_SENDING_ADDR as osc_sending_addr;
-pub use OSC_SENDING_PORT as osc_sending_port;
 
 // ---------------------------------------------------------------------------
 // Global runtime state (shared via atomics)
@@ -101,6 +152,30 @@ static TRANSPOSE_SEMITONES: AtomicI32 = AtomicI32::new(0);
 
 /// When true the main loop will terminate and the program will shut down.
 static EXIT_FLAG: AtomicBool = AtomicBool::new(false);
+
+/// Global configuration loaded at startup
+static mut GLOBAL_CONFIG: Option<Config> = None;
+
+/// Get the global configuration (must be loaded first)
+pub fn get_config() -> &'static Config {
+    unsafe {
+        GLOBAL_CONFIG.as_ref().expect("Config not loaded")
+    }
+}
+
+/// Setzt den Transpose-Wert mit Grenzwert-Überprüfung
+pub fn set_transpose_semitones(value: i32) -> i32 {
+    let config = get_config();
+    let clamped = value.clamp(config.transpose.min as i32, config.transpose.max as i32);
+    TRANSPOSE_SEMITONES.store(clamped, Ordering::SeqCst);
+    if value != clamped {
+        eprintln!(
+            "[TRANSPOSE] Wert {} auf Bereich [{}, {}] begrenzt -> {}",
+            value, config.transpose.min, config.transpose.max, clamped
+        );
+    }
+    clamped
+}
 
 /// Enable OSC sending of MIDI data (true = enabled, false = disabled)
 static OSC_SENDING_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -116,7 +191,13 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    // Using global constants INPUT_PORT_NAME_SUBSTR and OUTPUT_PORT_NAME_SUBSTR
+    // Load configuration first
+    let config = load_config();
+    
+    // Store config in global static for other modules to access
+    unsafe {
+        GLOBAL_CONFIG = Some(config.clone());
+    }
 
     let mut midi_in = MidiInput::new("midir reading input")?;
     midi_in.ignore(Ignore::None);
@@ -125,7 +206,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     // Choose input port by substring match (first match). Falls back to explicit selection if none/multiple found.
     // Choose input port (substring or interactive selection)
-    let input_index = input::choose_input_port(&midi_in, INPUT_PORT_NAME_SUBSTR)?;
+    let input_index = input::choose_input_port(&midi_in, &config.midi.input_port_name_substr)?;
     let in_ports = midi_in.ports();
     let in_port = &in_ports[input_index];
 
@@ -144,7 +225,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Open the MIDI output port (choose by name substring). Prefer an output whose name
     // matches the requested substring but is not the exact same name as the selected input port.
     // Choose output port (substring or interactive selection)
-    let output_index = output::choose_output_port(&midi_out, OUTPUT_PORT_NAME_SUBSTR, &in_port_name)?;
+    let output_index = output::choose_output_port(&midi_out, &config.midi.output_port_name_substr, &in_port_name)?;
     let out_ports = midi_out.ports();
     let out_port = &out_ports[output_index];
 
@@ -153,10 +234,15 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Use default initial transpose 0 so forwarding starts immediately.
     // The spawned stdin handler thread still accepts numbers to change transpose later.
     let initial_transpose: i32 = 0;
+    // Initialize OSC-related atomics from configuration
+    OSC_SENDING_ENABLED.store(config.osc.sending_enabled, Ordering::SeqCst);
+    OSC_SEND_ORIGINAL.store(config.osc.send_original, Ordering::SeqCst);
+
     println!("Using initial transpose: {} semitones", initial_transpose);
     println!("OSC sending: {} (to {}:{})", 
         if OSC_SENDING_ENABLED.load(Ordering::SeqCst) { "enabled" } else { "disabled" },
-        OSC_SENDING_ADDR, OSC_SENDING_PORT);
+        config.osc.sending_addr, config.osc.sending_port);
+    println!("OSC sending mode: {}", if OSC_SEND_ORIGINAL.load(Ordering::SeqCst) { "original" } else { "transposed" });
     println!("Type 'help' for commands, 'exit' to quit");
 
     // Initialize global atomics used by helper threads
@@ -201,7 +287,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mqtt_handle = mqtt_listener::spawn_mqtt_listener();
 
     // Spawn OSC sender threads for both original and transposed MIDI
-    let osc_target_addr = format!("{}:{}", OSC_SENDING_ADDR, OSC_SENDING_PORT);
+    let osc_target_addr = format!("{}:{}", config.osc.sending_addr, config.osc.sending_port);
     let osc_original_handle = osc_sender::spawn_osc_sender(
         osc_target_addr.clone(),
         osc_original_rx,

@@ -10,8 +10,11 @@ use rosc::{OscPacket, OscType, decoder};
 /// The thread checks `crate::EXIT_FLAG` periodically to shut down gracefully.
 pub fn spawn_osc_listener() -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        // Bind UDP socket on configured address from main.rs
-        let bind_addr = crate::OSC_LISTENING_ADDR;
+        // Get configuration
+        let config = crate::get_config();
+        
+        // Bind UDP socket on configured address from config.json
+        let bind_addr = &config.osc.listening_addr;
         let socket = match UdpSocket::bind(bind_addr) {
             Ok(s) => s,
             Err(err) => {
@@ -25,9 +28,9 @@ pub fn spawn_osc_listener() -> thread::JoinHandle<()> {
         
         println!("OSC listener bound on {} (paths: {}, {}, {})", 
             bind_addr, 
-            crate::OSC_TRANSPOSE_PATH,
-            crate::OSC_TRANSPOSE_UP_PATH,
-            crate::OSC_TRANSPOSE_DOWN_PATH);
+            config.osc.transpose_path,
+            config.osc.transpose_up_path,
+            config.osc.transpose_down_path);
 
         let mut buf = [0u8; rosc::decoder::MTU];
 
@@ -78,8 +81,9 @@ fn handle_packet(packet: OscPacket) {
 fn handle_message(msg: rosc::OscMessage) {
     let addr = &msg.addr;
     let args = &msg.args;
+    let config = crate::get_config();
 
-    if addr == crate::OSC_TRANSPOSE_PATH {
+    if addr == &config.osc.transpose_path {
         // Handle /transpose - set absolute transpose value
         if let Some(arg) = args.first() {
             let val_opt: Option<i32> = match arg {
@@ -90,15 +94,15 @@ fn handle_message(msg: rosc::OscMessage) {
                 _ => None,
             };
             if let Some(v) = val_opt {
-                crate::TRANSPOSE_SEMITONES.store(v, Ordering::SeqCst);
-                println!("[OSC] Transpose set to {}", v);
+                let clamped_value = crate::set_transpose_semitones(v);
+                println!("[OSC] Transpose set to {}", clamped_value);
             } else {
                 eprintln!("[OSC] /transpose requires numeric argument (got {:?})", arg);
             }
         } else {
             eprintln!("[OSC] /transpose without argument ignored");
         }
-    } else if addr == crate::OSC_TRANSPOSE_UP_PATH {
+    } else if addr == &config.osc.transpose_up_path {
         // Handle /transposeUp - increment transpose by 1 if argument equals 1
         if let Some(arg) = args.first() {
             let should_increment = match arg {
@@ -112,14 +116,13 @@ fn handle_message(msg: rosc::OscMessage) {
             
             if should_increment {
                 let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
-                let new_value = current + 1;
-                crate::TRANSPOSE_SEMITONES.store(new_value, Ordering::SeqCst);
+                let new_value = crate::set_transpose_semitones(current + 1);
                 println!("[OSC] Transpose UP: {} -> {}", current, new_value);
             }
         } else {
             eprintln!("[OSC] /transposeUp without argument ignored");
         }
-    } else if addr == crate::OSC_TRANSPOSE_DOWN_PATH {
+    } else if addr == &config.osc.transpose_down_path {
         // Handle /transposeDown - decrement transpose by 1 if argument equals 1
         if let Some(arg) = args.first() {
             let should_decrement = match arg {
@@ -133,8 +136,7 @@ fn handle_message(msg: rosc::OscMessage) {
             
             if should_decrement {
                 let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
-                let new_value = current - 1;
-                crate::TRANSPOSE_SEMITONES.store(new_value, Ordering::SeqCst);
+                let new_value = crate::set_transpose_semitones(current - 1);
                 println!("[OSC] Transpose DOWN: {} -> {}", current, new_value);
             }
         } else {

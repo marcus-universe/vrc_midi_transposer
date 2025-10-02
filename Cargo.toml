@@ -1,5 +1,5 @@
 [package]
-name = "transposer2025"
+name = "VRC-Midi-Transposer"
 version = "1.0.0"
 edition = "2021"
 
