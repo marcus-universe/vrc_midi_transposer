@@ -41,7 +41,8 @@ pub struct MidiConfig {
 #[derive(Debug, serde::Deserialize, Clone)]
 #[serde(default)]
 pub struct OscConfig {
-    pub listening_addr: String,
+    pub listening_host: String,
+    pub listening_port: u16,
     pub transpose_path: String,
     pub transpose_up_path: String,
     pub transpose_down_path: String,
@@ -56,7 +57,8 @@ pub struct OscConfig {
 impl Default for OscConfig {
     fn default() -> Self {
         OscConfig {
-            listening_addr: "127.0.0.1:9069".to_string(),
+            listening_host: "127.0.0.1".to_string(),
+            listening_port: 9069,
             transpose_path: "/transpose".to_string(),
             transpose_up_path: "/transposeUp".to_string(),
             transpose_down_path: "/transposeDown".to_string(),
@@ -99,7 +101,8 @@ fn load_config() -> Config {
             output_port_name_substr: "MIDIOUT7 (MRCC)".to_string(),
         },
         osc: OscConfig {
-            listening_addr: "127.0.0.1:9069".to_string(),
+            listening_host: "127.0.0.1".to_string(),
+            listening_port: 9069,
             transpose_path: "/transpose".to_string(),
             transpose_up_path: "/transposeUp".to_string(),
             transpose_down_path: "/transposeDown".to_string(),

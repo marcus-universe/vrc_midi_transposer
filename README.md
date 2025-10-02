@@ -112,7 +112,8 @@ These two OSC-related flags can also be configured at startup in `config.json` i
 
 ```json
 "osc": {
-   "listening_addr": "127.0.0.1:9069",
+  "listening_host": "127.0.0.1",
+  "listening_port": 9069,
    "transpose_path": "/transpose",
    "transpose_up_path": "/transposeUp",
    "transpose_down_path": "/transposeDown",

@@ -13,9 +13,9 @@ pub fn spawn_osc_listener() -> thread::JoinHandle<()> {
         // Get configuration
         let config = crate::get_config();
         
-        // Bind UDP socket on configured address from config.json
-        let bind_addr = &config.osc.listening_addr;
-        let socket = match UdpSocket::bind(bind_addr) {
+        // Bind UDP socket on configured host:port from config.json
+        let bind_addr = format!("{}:{}", config.osc.listening_host, config.osc.listening_port);
+        let socket = match UdpSocket::bind(&bind_addr) {
             Ok(s) => s,
             Err(err) => {
                 eprintln!("OSC bind failed on {}: {}", bind_addr, err);

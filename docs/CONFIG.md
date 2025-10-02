@@ -13,7 +13,8 @@ All configuration is now managed through a single `config.json` file in the proj
     "output_port_name_substr": "MIDIOUT7 (MRCC)"
   },
   "osc": {
-    "listening_addr": "127.0.0.1:9069",
+    "listening_host": "127.0.0.1",
+    "listening_port": 9069,
     "transpose_path": "/transpose",
     "transpose_up_path": "/transposeUp",
     "transpose_down_path": "/transposeDown",
@@ -45,7 +46,8 @@ All configuration is now managed through a single `config.json` file in the proj
 
 #### OSC Configuration
 
-- `listening_addr`: Address and port for OSC listener (format: "IP:PORT")
+- `listening_host`: Host/IP for OSC listener
+- `listening_port`: Port for OSC listener
 - `transpose_path`: OSC path for absolute transpose commands
 - `transpose_up_path`: OSC path for transpose increment commands
 - `transpose_down_path`: OSC path for transpose decrement commands
