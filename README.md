@@ -4,10 +4,8 @@
   <img src="./docs/assets/icon_wide.png" alt="VRC_Midi_Transposer Icon Wide" width="600"/>
   <br>
   <img src="https://img.shields.io/github/license/marcus-universe/vrc_midi_transposer.svg" />
-  <img src="https://img.shields.io/github/stars/marcus-universe/vrc_midi_transposer?style=flat
-.svg" />
-  <img src="https://img.shields.io/badge/lang-rust-orange
-.svg" />
+  <img src="https://img.shields.io/github/stars/marcus-universe/vrc_midi_transposer?style=flat" />
+  <img src="https://img.shields.io/badge/lang-rust-orange" />
 </p>
 
 <p align="center">

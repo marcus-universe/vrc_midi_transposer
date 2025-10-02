@@ -69,10 +69,6 @@ All configuration is now managed through a single `config.json` file in the proj
 - `min`: Minimum transpose value in semitones
 - `max`: Maximum transpose value in semitones
 
-### Migration from mqtt_credentials.json
-
-The previous `mqtt_credentials.json` file is no longer needed. The MQTT credentials are now included directly in the main `config.json` file under the `mqtt` section.
-
 ### Default Behavior
 
 If `config.json` is not found, the program will use built-in default values and display a warning message. The defaults match the previous hardcoded configuration.

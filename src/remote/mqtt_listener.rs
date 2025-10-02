@@ -8,7 +8,9 @@ const CLIENT_ID: &str = "transposer2025";
 const KEEP_ALIVE_SECS: u64 = 30;
 const RECONNECT_DELAY_SECS: u64 = 1;
 const LOOP_DELAY_MS: u64 = 50;
-const QUEUE_SIZE: usize = 10;
+// Queue for outgoing MQTT requests (subscribe/publish). Needs to be large enough
+// to hold initial discovery publishes + subscriptions until the event loop drains.
+const QUEUE_SIZE: usize = 64;
 
 // Home Assistant Discovery Constants
 const DEVICE_ID: &str = "midi_transposer_transposer2025";
@@ -23,6 +25,11 @@ struct MqttTopics {
     transpose_down: String,
     transpose_state: String,
     availability: String,
+    // OSC related
+    osc_sending_enabled_set: String,
+    osc_sending_enabled_state: String,
+    osc_send_original_set: String,
+    osc_send_original_state: String,
 }
 
 impl MqttTopics {
@@ -33,6 +40,11 @@ impl MqttTopics {
             transpose_down: format!("{}/transposeDown", base_topic),
             transpose_state: format!("{}/state/transpose", base_topic),
             availability: format!("{}/availability", base_topic),
+            // OSC switches
+            osc_sending_enabled_set: format!("{}/osc/sendingEnabled", base_topic),
+            osc_sending_enabled_state: format!("{}/state/osc/sendingEnabled", base_topic),
+            osc_send_original_set: format!("{}/osc/sendOriginal", base_topic),
+            osc_send_original_state: format!("{}/state/osc/sendOriginal", base_topic),
         }
     }
 }
@@ -149,6 +161,60 @@ fn publish_homeassistant_discovery(client: &Client, topics: &MqttTopics) {
         button_down_config,
     );
 
+    // Switch: OSC Sending Enabled
+    let switch_osc_send_cfg = format!(
+        r#"{{
+  "name": "OSC Sending Enabled",
+  "unique_id": "{}_osc_sending_enabled",
+  "command_topic": "{}",
+  "state_topic": "{}",
+  "payload_on": "1",
+  "payload_off": "0",
+  "state_on": "1",
+  "state_off": "0",
+  "availability_topic": "{}",
+  "device": {}
+}}"#,
+        CLIENT_ID,
+        topics.osc_sending_enabled_set,
+        topics.osc_sending_enabled_state,
+        topics.availability,
+        device_json
+    );
+    let _ = client.publish(
+        "homeassistant/switch/midi_transposer/osc_sending_enabled/config",
+        QoS::AtLeastOnce,
+        true,
+        switch_osc_send_cfg,
+    );
+
+    // Switch: OSC Send Original (if off -> send transposed)
+    let switch_send_original_cfg = format!(
+        r#"{{
+  "name": "OSC Send Original",
+  "unique_id": "{}_osc_send_original",
+  "command_topic": "{}",
+  "state_topic": "{}",
+  "payload_on": "1",
+  "payload_off": "0",
+  "state_on": "1",
+  "state_off": "0",
+  "availability_topic": "{}",
+  "device": {}
+}}"#,
+        CLIENT_ID,
+        topics.osc_send_original_set,
+        topics.osc_send_original_state,
+        topics.availability,
+        device_json
+    );
+    let _ = client.publish(
+        "homeassistant/switch/midi_transposer/osc_send_original/config",
+        QoS::AtLeastOnce,
+        true,
+        switch_send_original_cfg,
+    );
+
     println!("[MQTT] Home Assistant Discovery konfiguriert");
 }
 
@@ -174,10 +240,14 @@ fn subscribe_to_topics(client: &Client, topics: &MqttTopics) -> Result<(), Box<d
     client.subscribe(&topics.transpose_set, QoS::AtLeastOnce)?;
     client.subscribe(&topics.transpose_up, QoS::AtLeastOnce)?;
     client.subscribe(&topics.transpose_down, QoS::AtLeastOnce)?;
+    // OSC related switches
+    client.subscribe(&topics.osc_sending_enabled_set, QoS::AtLeastOnce)?;
+    client.subscribe(&topics.osc_send_original_set, QoS::AtLeastOnce)?;
     
     println!(
-        "[MQTT] Subscribed to topics: {}, {}, {}", 
-        topics.transpose_set, topics.transpose_up, topics.transpose_down
+        "[MQTT] Subscribed to topics: {}, {}, {}, {}, {}", 
+        topics.transpose_set, topics.transpose_up, topics.transpose_down,
+        topics.osc_sending_enabled_set, topics.osc_send_original_set
     );
     
     Ok(())
@@ -208,26 +278,7 @@ pub fn spawn_mqtt_listener() -> thread::JoinHandle<()> {
         let mqtt_options = create_mqtt_options(host, port, &creds, &topics.availability);
         let (client, connection) = Client::new(mqtt_options, QUEUE_SIZE);
 
-        // Abonniere Topics
-        if let Err(e) = subscribe_to_topics(&client, &topics) {
-            eprintln!("[MQTT] Subscription failed: {}", e);
-            return;
-        }
-
-        println!(
-            "[MQTT] Connected to {}:{} as '{}' successfully",
-            host, port, creds.username
-        );
-
-        // Publiziere Home Assistant MQTT Discovery-Konfiguration
-        publish_homeassistant_discovery(&client, &topics);
-
-        // Gerät als online markieren und initialen Zustand publizieren
-        let _ = client.publish(&topics.availability, QoS::AtLeastOnce, true, "online");
-        let initial_value = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst).to_string();
-        let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, initial_value);
-
-        // Hauptschleife für MQTT-Nachrichten
+        // Hauptschleife für MQTT-Nachrichten (publishes erfolgen nach ConnAck)
         run_mqtt_message_loop(connection, &client, &topics);
     })
 }
@@ -267,6 +318,18 @@ fn handle_mqtt_message(
             let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, new_value.to_string());
             return Some(new_value);
         }
+    } else if topic == topics.osc_sending_enabled_set {
+        // Toggle OSC sending enabled
+        let enable = parse_boolean_payload(payload);
+        crate::OSC_SENDING_ENABLED.store(enable, Ordering::SeqCst);
+        println!("[MQTT] OSC Sending Enabled -> {}", enable);
+        let _ = client.publish(&topics.osc_sending_enabled_state, QoS::AtLeastOnce, true, if enable { "1" } else { "0" });
+    } else if topic == topics.osc_send_original_set {
+        // Toggle whether to send original (true) or transposed (false)
+        let send_orig = parse_boolean_payload(payload);
+        crate::OSC_SEND_ORIGINAL.store(send_orig, Ordering::SeqCst);
+        println!("[MQTT] OSC Send Original -> {}", send_orig);
+        let _ = client.publish(&topics.osc_send_original_state, QoS::AtLeastOnce, true, if send_orig { "1" } else { "0" });
     }
     
     None
@@ -276,6 +339,8 @@ fn handle_mqtt_message(
 fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, topics: &MqttTopics) {
     let mut iter = connection.iter();
     let mut last_state_sent = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
+    let mut last_osc_enabled = crate::OSC_SENDING_ENABLED.load(Ordering::SeqCst);
+    let mut last_send_original = crate::OSC_SEND_ORIGINAL.load(Ordering::SeqCst);
 
     loop {
         // Prüfe Exit-Flag
@@ -294,6 +359,25 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                     if let Some(new_value) = handle_mqtt_message(client, topics, topic, payload) {
                         last_state_sent = new_value;
                     }
+                }
+                Ok(Event::Incoming(Incoming::ConnAck(ack))) => {
+                    println!("[MQTT] ConnAck: session_present={}, code={:?}", ack.session_present, ack.code);
+
+                    // Beim (Re-)Connect: subscriben und initiale States/Discovery publizieren
+                    if let Err(e) = subscribe_to_topics(client, topics) {
+                        eprintln!("[MQTT] Subscription failed: {}", e);
+                    }
+
+                    // Discovery und Anfangszustände publizieren (einmal je Start; bei Reconnect erneut okay)
+                    publish_homeassistant_discovery(client, topics);
+                    let _ = client.publish(&topics.availability, QoS::AtLeastOnce, true, "online");
+                    let initial_value = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst).to_string();
+                    let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, initial_value);
+                    let osc_enabled = if crate::OSC_SENDING_ENABLED.load(Ordering::SeqCst) { "1" } else { "0" };
+                    let _ = client.publish(&topics.osc_sending_enabled_state, QoS::AtLeastOnce, true, osc_enabled);
+                    let send_orig = if crate::OSC_SEND_ORIGINAL.load(Ordering::SeqCst) { "1" } else { "0" };
+                    let _ = client.publish(&topics.osc_send_original_state, QoS::AtLeastOnce, true, send_orig);
+                    // initial state published after ConnAck
                 }
                 Ok(_) => {
                     // Andere Events ignorieren
@@ -318,6 +402,29 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                 current_value.to_string(),
             );
             last_state_sent = current_value;
+        }
+
+        // Publish OSC switch state changes (if altered externally)
+        let osc_enabled_now = crate::OSC_SENDING_ENABLED.load(Ordering::SeqCst);
+        if osc_enabled_now != last_osc_enabled {
+            let _ = client.publish(
+                &topics.osc_sending_enabled_state,
+                QoS::AtLeastOnce,
+                true,
+                if osc_enabled_now { "1" } else { "0" },
+            );
+            last_osc_enabled = osc_enabled_now;
+        }
+
+        let send_original_now = crate::OSC_SEND_ORIGINAL.load(Ordering::SeqCst);
+        if send_original_now != last_send_original {
+            let _ = client.publish(
+                &topics.osc_send_original_state,
+                QoS::AtLeastOnce,
+                true,
+                if send_original_now { "1" } else { "0" },
+            );
+            last_send_original = send_original_now;
         }
 
         // Vermeide Busy-Loop
