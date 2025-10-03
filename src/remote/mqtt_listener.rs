@@ -215,7 +215,7 @@ fn publish_homeassistant_discovery(client: &Client, topics: &MqttTopics) {
         switch_send_original_cfg,
     );
 
-    println!("[MQTT] Home Assistant Discovery konfiguriert");
+    println!("[MQTT] Home Assistant Discovery configured");
 }
 
 /// Erstellt MQTT-Optionen mit Konfiguration und Last Will Testament
@@ -294,18 +294,18 @@ fn handle_mqtt_message(
         // Absoluter Transpose-Wert
         if let Some(value) = parse_transpose_payload(payload) {
             let clamped_value = crate::set_transpose_semitones(value);
-            println!("[MQTT] Transpose auf {} gesetzt", clamped_value);
+            println!("[MQTT] Transpose set to {}", clamped_value);
             let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, clamped_value.to_string());
             return Some(clamped_value);
         } else {
-            eprintln!("[MQTT] Ungültige /transpose Payload: {:?}", payload);
+            eprintln!("[MQTT] Invalid /transpose payload: {:?}", payload);
         }
     } else if topic == topics.transpose_up {
         // Transpose erhöhen
         if parse_boolean_payload(payload) {
             let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
             let new_value = crate::set_transpose_semitones(current + 1);
-            println!("[MQTT] Transpose HOCH: {} -> {}", current, new_value);
+            println!("[MQTT] Transpose UP: {} -> {}", current, new_value);
             let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, new_value.to_string());
             return Some(new_value);
         }
@@ -314,7 +314,7 @@ fn handle_mqtt_message(
         if parse_boolean_payload(payload) {
             let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
             let new_value = crate::set_transpose_semitones(current - 1);
-            println!("[MQTT] Transpose RUNTER: {} -> {}", current, new_value);
+            println!("[MQTT] Transpose DOWN: {} -> {}", current, new_value);
             let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, new_value.to_string());
             return Some(new_value);
         }
@@ -345,7 +345,7 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
     loop {
         // Prüfe Exit-Flag
         if crate::EXIT_FLAG.load(Ordering::SeqCst) {
-            println!("[MQTT] Beenden angefordert, stoppe Listener");
+            println!("[MQTT] Shutdown requested, stopping listener");
             break;
         }
 
@@ -380,15 +380,15 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                     // initial state published after ConnAck
                 }
                 Ok(_) => {
-                    // Andere Events ignorieren
+                    // Ignore other events
                 }
                 Err(e) => {
-                    eprintln!("[MQTT] Verbindungsfehler: {} (Wiederverbindung in {}s)", e, RECONNECT_DELAY_SECS);
+                    eprintln!("[MQTT] Connection error: {} (reconnecting in {}s)", e, RECONNECT_DELAY_SECS);
                     thread::sleep(Duration::from_secs(RECONNECT_DELAY_SECS));
                 }
             }
         } else {
-            eprintln!("[MQTT] Verbindungs-Iterator beendet");
+            eprintln!("[MQTT] Connection iterator ended");
             break;
         }
 

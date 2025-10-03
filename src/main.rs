@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::io::Write;
 // no direct stdin/stdout usage here; stdin is handled by `stdin_handler.rs`
 use std::sync::mpsc::channel;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -6,6 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use midir::{Ignore, MidiInput, MidiOutput};
+use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
 
 mod io;
 mod remote;
@@ -20,6 +22,20 @@ pub use remote::osc_listener;
 pub use remote::osc_sender;
 pub use remote::mqtt_listener;
 pub use general::forwarder;
+
+// ---------------------------------------------------------------------------
+// Splash: print ASCII art logo in blue on supported terminals (incl. Windows CMD)
+// ---------------------------------------------------------------------------
+fn print_ascii_logo() {
+    // Embed the ASCII art at compile time
+    const ASCII: &str = include_str!("ASCII.txt");
+
+    // Use termcolor to reliably set color on Windows (Console API) and others
+    let mut stdout = StandardStream::stdout(ColorChoice::Always);
+    let _ = stdout.set_color(ColorSpec::new().set_fg(Some(Color::Blue)).set_intense(true));
+    let _ = writeln!(&mut stdout, "\n{}\n", ASCII);
+    let _ = stdout.reset();
+}
 
 // ---------------------------------------------------------------------------
 // Configuration structure loaded from config.json
@@ -166,14 +182,14 @@ pub fn get_config() -> &'static Config {
     }
 }
 
-/// Setzt den Transpose-Wert mit Grenzwert-Überprüfung
+/// Sets the transpose value with range clamping
 pub fn set_transpose_semitones(value: i32) -> i32 {
     let config = get_config();
     let clamped = value.clamp(config.transpose.min as i32, config.transpose.max as i32);
     TRANSPOSE_SEMITONES.store(clamped, Ordering::SeqCst);
     if value != clamped {
         eprintln!(
-            "[TRANSPOSE] Wert {} auf Bereich [{}, {}] begrenzt -> {}",
+            "[TRANSPOSE] Clamped {} to range [{}, {}] -> {}",
             value, config.transpose.min, config.transpose.max, clamped
         );
     }
@@ -194,6 +210,9 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
+    // Show a nice splash logo at startup
+    print_ascii_logo();
+
     // Load configuration first
     let config = load_config();
     
