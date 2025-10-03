@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::sync::OnceLock;
+use std::env;
 
 use midir::{Ignore, MidiInput, MidiOutput};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -238,6 +239,40 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     // Show a nice splash logo at startup
     print_ascii_logo();
+
+    // CI test mode: skip MIDI/OSC/MQTT and only verify clean exit via stdin
+    if env::var("CI_TEST_EXIT").as_deref() == Ok("1") {
+        // Minimal default config sufficient for getters; MQTT disabled to avoid background threads
+        let config = Config {
+            midi: MidiConfig { input_port_name_substr: "".into(), output_port_name_substr: "".into() },
+            osc: OscConfig { ..Default::default() },
+            mqtt: MqttConfig {
+                broker_host: "127.0.0.1".into(),
+                broker_port: 1883,
+                base_topic: "midi_transposer".into(),
+                username: "".into(),
+                password: "".into(),
+                enabled: false,
+            },
+            transpose: TransposeConfig { min: -24, max: 24 },
+            debug: false,
+        };
+        let _ = GLOBAL_CONFIG.set(config.clone());
+        DEBUG_ENABLED.store(config.debug, Ordering::SeqCst);
+        MQTT_ENABLED.store(false, Ordering::SeqCst);
+        TRANSPOSE_SEMITONES.store(0, Ordering::SeqCst);
+        EXIT_FLAG.store(false, Ordering::SeqCst);
+
+        // Only stdin handler; no other threads
+        let stdin_handle = stdin_handler::spawn_stdin_handler();
+        if is_debug_enabled() { println!("[CI] Waiting for exit via stdin..."); }
+        while !EXIT_FLAG.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(50));
+        }
+        println!("Closing connections and exiting...");
+        let _ = stdin_handle.join();
+        return Ok(());
+    }
 
     // Load configuration first
     let config = load_config();
