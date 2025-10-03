@@ -8,6 +8,8 @@ pub fn spawn_stdin_handler() -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let stdin = stdin();
         let mut line = String::new();
+        // Optional handle for MQTT thread when toggled from console
+        let mut mqtt_handle: Option<std::thread::JoinHandle<()>> = None;
         loop {
             line.clear();
             if stdin.read_line(&mut line).is_err() {
@@ -23,6 +25,18 @@ pub fn spawn_stdin_handler() -> thread::JoinHandle<()> {
                 break;
             }
             
+            // Debug toggle commands
+            if cmd.eq_ignore_ascii_case("debug on") || cmd.eq_ignore_ascii_case("debug enable") {
+                crate::DEBUG_ENABLED.store(true, std::sync::atomic::Ordering::SeqCst);
+                println!("Debug enabled");
+                continue;
+            }
+            if cmd.eq_ignore_ascii_case("debug off") || cmd.eq_ignore_ascii_case("debug disable") {
+                crate::DEBUG_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+                println!("Debug disabled");
+                continue;
+            }
+
             // OSC commands (accept text and numeric forms)
             if cmd.eq_ignore_ascii_case("osc on") || cmd.eq_ignore_ascii_case("osc enable") || cmd == "1" {
                 crate::OSC_SENDING_ENABLED.store(true, Ordering::SeqCst);
@@ -86,11 +100,29 @@ pub fn spawn_stdin_handler() -> thread::JoinHandle<()> {
                 println!("  osc off/disable  - Disable OSC sending");
                 println!("  osc original     - Send original input MIDI via OSC");
                 println!("  osc transposed   - Send transposed MIDI via OSC");
+                println!("  mqtt on/off      - Enable/Disable MQTT listener");
+                println!("  debug on/off     - Enable/Disable verbose debug prints");
                 println!("  help/h           - Show this help");
                 println!("  exit/quit/q      - Exit program");
                 continue;
             }
             
+            // MQTT toggle commands
+            if cmd.eq_ignore_ascii_case("mqtt on") || cmd.eq_ignore_ascii_case("mqtt enable") {
+                crate::MQTT_ENABLED.store(true, std::sync::atomic::Ordering::SeqCst);
+                // Spawn MQTT listener if not running yet
+                if mqtt_handle.is_none() {
+                    mqtt_handle = Some(crate::mqtt_listener::spawn_mqtt_listener());
+                }
+                println!("MQTT enabled");
+                continue;
+            }
+            if cmd.eq_ignore_ascii_case("mqtt off") || cmd.eq_ignore_ascii_case("mqtt disable") {
+                crate::MQTT_ENABLED.store(false, std::sync::atomic::Ordering::SeqCst);
+                println!("MQTT disabled (listener will stop on next reconnect/exit)");
+                continue;
+            }
+
             if let Ok(v) = cmd.parse::<i32>() {
                 let clamped_value = crate::set_transpose_semitones(v);
                 println!("Transpose set to {}", clamped_value);

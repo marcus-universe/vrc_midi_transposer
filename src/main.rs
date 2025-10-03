@@ -37,6 +37,7 @@ fn print_ascii_logo() {
     let _ = stdout.reset();
 }
 
+
 // ---------------------------------------------------------------------------
 // Configuration structure loaded from config.json
 // ---------------------------------------------------------------------------
@@ -46,6 +47,9 @@ pub struct Config {
     pub osc: OscConfig,
     pub mqtt: MqttConfig,
     pub transpose: TransposeConfig,
+    /// Enable verbose logging (e.g., per-note OSC send logs)
+    #[serde(default)]
+    pub debug: bool,
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -93,7 +97,11 @@ pub struct MqttConfig {
     pub base_topic: String,
     pub username: String,
     pub password: String,
+    #[serde(default = "default_mqtt_enabled")]
+    pub enabled: bool,
 }
+
+fn default_mqtt_enabled() -> bool { true }
 
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct TransposeConfig {
@@ -133,11 +141,13 @@ fn load_config() -> Config {
             base_topic: "midi_transposer".to_string(),
             username: "".to_string(),
             password: "".to_string(),
+            enabled: true,
         },
         transpose: TransposeConfig {
             min: -24,
             max: 24,
         },
+        debug: false,
     };
 
     if !path.exists() {
@@ -148,7 +158,7 @@ fn load_config() -> Config {
     match std::fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<Config>(&text) {
             Ok(config) => {
-                println!("[CONFIG] Loaded configuration from config.json");
+                CONFIG_LOADED_FROM_FILE.store(true, Ordering::SeqCst);
                 config
             },
             Err(err) => {
@@ -175,11 +185,22 @@ static EXIT_FLAG: AtomicBool = AtomicBool::new(false);
 /// Global configuration loaded at startup
 static mut GLOBAL_CONFIG: Option<Config> = None;
 
+/// Global debug flag (runtime-togglable). Initialized from config.debug.
+pub(crate) static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether config was successfully loaded from config.json (not defaults)
+pub(crate) static CONFIG_LOADED_FROM_FILE: AtomicBool = AtomicBool::new(false);
+
 /// Get the global configuration (must be loaded first)
 pub fn get_config() -> &'static Config {
     unsafe {
         GLOBAL_CONFIG.as_ref().expect("Config not loaded")
     }
+}
+
+/// Check whether verbose debug logging is enabled
+pub fn is_debug_enabled() -> bool {
+    DEBUG_ENABLED.load(Ordering::SeqCst)
 }
 
 /// Sets the transpose value with range clamping
@@ -202,6 +223,12 @@ static OSC_SENDING_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Send original input MIDI (true) or transposed MIDI (false) via OSC
 pub static OSC_SEND_ORIGINAL: AtomicBool = AtomicBool::new(true);
 
+/// MQTT enabled flag (runtime)
+pub(crate) static MQTT_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// MQTT connection state (set by mqtt_listener)
+pub(crate) static MQTT_CONNECTED: AtomicBool = AtomicBool::new(false);
+
 fn main() {
     match run() {
         Ok(_) => (),
@@ -220,6 +247,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     unsafe {
         GLOBAL_CONFIG = Some(config.clone());
     }
+    // Initialize runtime debug flag from config
+    DEBUG_ENABLED.store(config.debug, Ordering::SeqCst);
+    // Inform about config source when debug is enabled
+    if is_debug_enabled() && CONFIG_LOADED_FROM_FILE.load(Ordering::SeqCst) {
+        println!("[CONFIG] Loaded configuration from config.json");
+    }
 
     let mut midi_in = MidiInput::new("midir reading input")?;
     midi_in.ignore(Ignore::None);
@@ -232,7 +265,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let in_ports = midi_in.ports();
     let in_port = &in_ports[input_index];
 
-    println!("\nOpening input connection");
+    if is_debug_enabled() { println!("\nOpening input connection"); }
     let in_port_name = midi_in.port_name(in_port)?;
 
     // Channel: midi input callback -> forwarder thread
@@ -260,12 +293,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     OSC_SENDING_ENABLED.store(config.osc.sending_enabled, Ordering::SeqCst);
     OSC_SEND_ORIGINAL.store(config.osc.send_original, Ordering::SeqCst);
 
-    println!("Using initial transpose: {} semitones", initial_transpose);
-    println!("OSC sending: {} (to {}:{})", 
-        if OSC_SENDING_ENABLED.load(Ordering::SeqCst) { "enabled" } else { "disabled" },
-        config.osc.sending_addr, config.osc.sending_port);
-    println!("OSC sending mode: {}", if OSC_SEND_ORIGINAL.load(Ordering::SeqCst) { "original" } else { "transposed" });
-    println!("Type 'help' for commands, 'exit' to quit");
+    if is_debug_enabled() {
+        println!("Using initial transpose: {} semitones", initial_transpose);
+        println!("OSC sending: {} (to {}:{})", 
+            if OSC_SENDING_ENABLED.load(Ordering::SeqCst) { "enabled" } else { "disabled" },
+            config.osc.sending_addr, config.osc.sending_port);
+        println!("OSC sending mode: {}", if OSC_SEND_ORIGINAL.load(Ordering::SeqCst) { "original" } else { "transposed" });
+    }
 
     // Initialize global atomics used by helper threads
     TRANSPOSE_SEMITONES.store(initial_transpose, Ordering::SeqCst);
@@ -290,11 +324,13 @@ fn run() -> Result<(), Box<dyn Error>> {
         (),
     )?;
 
-    println!(
-        "Connection open, forwarding from '{}' -> '{}' (type number+Enter to change transpose, empty line or 'exit' to quit)...",
-        in_port_name,
-        out_port_name
-    );
+    if is_debug_enabled() {
+        println!(
+            "Connection open, forwarding from '{}' -> '{}' (type number+Enter to change transpose, empty line or 'exit' to quit)...",
+            in_port_name,
+            out_port_name
+        );
+    }
 
     // Spawn forwarder thread (owns the output connection and applies transpose)
     let forward_handle = forwarder::spawn_forwarder(conn_out, rx, Some(osc_transposed_tx));
@@ -305,8 +341,15 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Spawn OSC listener on UDP port 9069 (updates TRANSPOSE_SEMITONES on /transpose)
     let osc_handle = osc_listener::spawn_osc_listener();
 
-    // Spawn MQTT listener (updates TRANSPOSE_SEMITONES via MQTT topics)
-    let mqtt_handle = mqtt_listener::spawn_mqtt_listener();
+    // Initialize MQTT enabled flag from config
+    MQTT_ENABLED.store(config.mqtt.enabled, Ordering::SeqCst);
+
+    // Spawn MQTT listener only if enabled
+    let mqtt_handle = if MQTT_ENABLED.load(Ordering::SeqCst) {
+        Some(mqtt_listener::spawn_mqtt_listener())
+    } else {
+        None
+    };
 
     // Spawn OSC sender threads for both original and transposed MIDI
     let osc_target_addr = format!("{}:{}", config.osc.sending_addr, config.osc.sending_port);
@@ -320,6 +363,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         osc_transposed_rx,
         &OSC_SENDING_ENABLED,
     );
+
+    // After all services are up, print final status once (ensures other debug logs appear before)
+    crate::general::check::print_final_status_after_startup();
 
     // Wait for exit signal coming from stdin handler
     while !EXIT_FLAG.load(Ordering::SeqCst) {
@@ -335,7 +381,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let _ = osc_handle.join();
     let _ = osc_original_handle.join();
     let _ = osc_transposed_handle.join();
-    let _ = mqtt_handle.join();
+    if let Some(h) = mqtt_handle { let _ = h.join(); }
 
     Ok(())
 }

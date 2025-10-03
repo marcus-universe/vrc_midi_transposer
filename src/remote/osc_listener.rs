@@ -13,6 +13,8 @@ pub fn spawn_osc_listener() -> thread::JoinHandle<()> {
         // Get configuration
         let config = crate::get_config();
         
+    crate::general::check::OSC_LISTENER_RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
+
         // Bind UDP socket on configured host:port from config.json
         let bind_addr = format!("{}:{}", config.osc.listening_host, config.osc.listening_port);
         let socket = match UdpSocket::bind(&bind_addr) {
@@ -26,11 +28,13 @@ pub fn spawn_osc_listener() -> thread::JoinHandle<()> {
         // Set socket timeout so we can check EXIT_FLAG periodically
         socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
         
-        println!("OSC listener bound on {} (paths: {}, {}, {})", 
-            bind_addr, 
-            config.osc.transpose_path,
-            config.osc.transpose_up_path,
-            config.osc.transpose_down_path);
+        if crate::is_debug_enabled() {
+            println!("OSC listener bound on {} (paths: {}, {}, {})", 
+                bind_addr, 
+                config.osc.transpose_path,
+                config.osc.transpose_up_path,
+                config.osc.transpose_down_path);
+        }
 
         let mut buf = [0u8; rosc::decoder::MTU];
 
@@ -62,7 +66,8 @@ pub fn spawn_osc_listener() -> thread::JoinHandle<()> {
             }
         }
 
-        println!("OSC listener exiting");
+    if crate::is_debug_enabled() { println!("OSC listener exiting"); }
+            crate::general::check::OSC_LISTENER_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
     })
 }
 
@@ -95,7 +100,7 @@ fn handle_message(msg: rosc::OscMessage) {
             };
             if let Some(v) = val_opt {
                 let clamped_value = crate::set_transpose_semitones(v);
-                println!("[OSC] Transpose set to {}", clamped_value);
+                if crate::is_debug_enabled() { println!("[OSC] Transpose set to {}", clamped_value); }
             } else {
                 eprintln!("[OSC] /transpose requires numeric argument (got {:?})", arg);
             }
@@ -117,7 +122,7 @@ fn handle_message(msg: rosc::OscMessage) {
             if should_increment {
                 let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
                 let new_value = crate::set_transpose_semitones(current + 1);
-                println!("[OSC] Transpose UP: {} -> {}", current, new_value);
+                if crate::is_debug_enabled() { println!("[OSC] Transpose UP: {} -> {}", current, new_value); }
             }
         } else {
             eprintln!("[OSC] /transposeUp without argument ignored");
@@ -137,7 +142,7 @@ fn handle_message(msg: rosc::OscMessage) {
             if should_decrement {
                 let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
                 let new_value = crate::set_transpose_semitones(current - 1);
-                println!("[OSC] Transpose DOWN: {} -> {}", current, new_value);
+                if crate::is_debug_enabled() { println!("[OSC] Transpose DOWN: {} -> {}", current, new_value); }
             }
         } else {
             eprintln!("[OSC] /transposeDown without argument ignored");

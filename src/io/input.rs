@@ -14,7 +14,7 @@ pub fn choose_input_port(midi_in: &midir::MidiInput, input_port_name_substr: &st
     for (i, p) in ports.iter().enumerate() {
         if let Ok(name) = midi_in.port_name(p) {
             if name.contains(input_port_name_substr) {
-                println!("Choosing input port matching '{}': {}", input_port_name_substr, name);
+                if crate::is_debug_enabled() { println!("Choosing input port matching '{}': {}", input_port_name_substr, name); }
                 return Ok(i);
             }
         }
@@ -22,13 +22,13 @@ pub fn choose_input_port(midi_in: &midir::MidiInput, input_port_name_substr: &st
 
     // Fallbacks: only one port -> choose it, otherwise list and ask
     if ports.len() == 1 {
-        println!("Choosing the only available input port: {}", midi_in.port_name(&ports[0])?);
+        if crate::is_debug_enabled() { println!("Choosing the only available input port: {}", midi_in.port_name(&ports[0])?); }
         return Ok(0);
     }
 
-    println!("\nAvailable input ports:");
+    if crate::is_debug_enabled() { println!("\nAvailable input ports:"); }
     for (i, p) in ports.iter().enumerate() {
-        println!("{}: {}", i, midi_in.port_name(p)?);
+        if crate::is_debug_enabled() { println!("{}: {}", i, midi_in.port_name(p)?); }
     }
 
     print!("Please select input port: ");

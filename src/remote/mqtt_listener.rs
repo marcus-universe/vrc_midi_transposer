@@ -30,6 +30,9 @@ struct MqttTopics {
     osc_sending_enabled_state: String,
     osc_send_original_set: String,
     osc_send_original_state: String,
+    // Debug related
+    debug_enabled_set: String,
+    debug_enabled_state: String,
 }
 
 impl MqttTopics {
@@ -45,6 +48,9 @@ impl MqttTopics {
             osc_sending_enabled_state: format!("{}/state/osc/sendingEnabled", base_topic),
             osc_send_original_set: format!("{}/osc/sendOriginal", base_topic),
             osc_send_original_state: format!("{}/state/osc/sendOriginal", base_topic),
+            // Debug switch
+            debug_enabled_set: format!("{}/debug/enabled", base_topic),
+            debug_enabled_state: format!("{}/state/debug/enabled", base_topic),
         }
     }
 }
@@ -215,7 +221,34 @@ fn publish_homeassistant_discovery(client: &Client, topics: &MqttTopics) {
         switch_send_original_cfg,
     );
 
-    println!("[MQTT] Home Assistant Discovery configured");
+    // Switch: Debug Enabled
+    let switch_debug_cfg = format!(
+        r#"{{
+  "name": "Debug Enabled",
+  "unique_id": "{}_debug_enabled",
+  "command_topic": "{}",
+  "state_topic": "{}",
+  "payload_on": "1",
+  "payload_off": "0",
+  "state_on": "1",
+  "state_off": "0",
+  "availability_topic": "{}",
+  "device": {}
+}}"#,
+        CLIENT_ID,
+        topics.debug_enabled_set,
+        topics.debug_enabled_state,
+        topics.availability,
+        device_json
+    );
+    let _ = client.publish(
+        "homeassistant/switch/midi_transposer/debug_enabled/config",
+        QoS::AtLeastOnce,
+        true,
+        switch_debug_cfg,
+    );
+
+    if crate::is_debug_enabled() { println!("[MQTT] Home Assistant Discovery configured"); }
 }
 
 /// Erstellt MQTT-Optionen mit Konfiguration und Last Will Testament
@@ -243,12 +276,17 @@ fn subscribe_to_topics(client: &Client, topics: &MqttTopics) -> Result<(), Box<d
     // OSC related switches
     client.subscribe(&topics.osc_sending_enabled_set, QoS::AtLeastOnce)?;
     client.subscribe(&topics.osc_send_original_set, QoS::AtLeastOnce)?;
+    // Debug switch
+    client.subscribe(&topics.debug_enabled_set, QoS::AtLeastOnce)?;
     
-    println!(
-        "[MQTT] Subscribed to topics: {}, {}, {}, {}, {}", 
-        topics.transpose_set, topics.transpose_up, topics.transpose_down,
-        topics.osc_sending_enabled_set, topics.osc_send_original_set
-    );
+    if crate::is_debug_enabled() {
+        println!(
+            "[MQTT] Subscribed to topics: {}, {}, {}, {}, {}, {}", 
+            topics.transpose_set, topics.transpose_up, topics.transpose_down,
+            topics.osc_sending_enabled_set, topics.osc_send_original_set,
+            topics.debug_enabled_set
+        );
+    }
     
     Ok(())
 }
@@ -294,7 +332,7 @@ fn handle_mqtt_message(
         // Absoluter Transpose-Wert
         if let Some(value) = parse_transpose_payload(payload) {
             let clamped_value = crate::set_transpose_semitones(value);
-            println!("[MQTT] Transpose set to {}", clamped_value);
+            if crate::is_debug_enabled() { println!("[MQTT] Transpose set to {}", clamped_value); }
             let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, clamped_value.to_string());
             return Some(clamped_value);
         } else {
@@ -305,7 +343,7 @@ fn handle_mqtt_message(
         if parse_boolean_payload(payload) {
             let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
             let new_value = crate::set_transpose_semitones(current + 1);
-            println!("[MQTT] Transpose UP: {} -> {}", current, new_value);
+            if crate::is_debug_enabled() { println!("[MQTT] Transpose UP: {} -> {}", current, new_value); }
             let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, new_value.to_string());
             return Some(new_value);
         }
@@ -314,7 +352,7 @@ fn handle_mqtt_message(
         if parse_boolean_payload(payload) {
             let current = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
             let new_value = crate::set_transpose_semitones(current - 1);
-            println!("[MQTT] Transpose DOWN: {} -> {}", current, new_value);
+            if crate::is_debug_enabled() { println!("[MQTT] Transpose DOWN: {} -> {}", current, new_value); }
             let _ = client.publish(&topics.transpose_state, QoS::AtLeastOnce, true, new_value.to_string());
             return Some(new_value);
         }
@@ -322,14 +360,21 @@ fn handle_mqtt_message(
         // Toggle OSC sending enabled
         let enable = parse_boolean_payload(payload);
         crate::OSC_SENDING_ENABLED.store(enable, Ordering::SeqCst);
-        println!("[MQTT] OSC Sending Enabled -> {}", enable);
+    if crate::is_debug_enabled() { println!("[MQTT] OSC Sending Enabled -> {}", enable); }
         let _ = client.publish(&topics.osc_sending_enabled_state, QoS::AtLeastOnce, true, if enable { "1" } else { "0" });
     } else if topic == topics.osc_send_original_set {
         // Toggle whether to send original (true) or transposed (false)
         let send_orig = parse_boolean_payload(payload);
         crate::OSC_SEND_ORIGINAL.store(send_orig, Ordering::SeqCst);
-        println!("[MQTT] OSC Send Original -> {}", send_orig);
+    if crate::is_debug_enabled() { println!("[MQTT] OSC Send Original -> {}", send_orig); }
         let _ = client.publish(&topics.osc_send_original_state, QoS::AtLeastOnce, true, if send_orig { "1" } else { "0" });
+    } else if topic == topics.debug_enabled_set {
+        // Toggle Debug enabled (verbose logging)
+        let enable = parse_boolean_payload(payload);
+        crate::DEBUG_ENABLED.store(enable, Ordering::SeqCst);
+        // Note: This message is intentionally not gated by debug to ensure visibility if enabled
+        if crate::is_debug_enabled() { println!("[MQTT] Debug Enabled -> {}", enable); }
+        let _ = client.publish(&topics.debug_enabled_state, QoS::AtLeastOnce, true, if enable { "1" } else { "0" });
     }
     
     None
@@ -341,11 +386,12 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
     let mut last_state_sent = crate::TRANSPOSE_SEMITONES.load(Ordering::SeqCst);
     let mut last_osc_enabled = crate::OSC_SENDING_ENABLED.load(Ordering::SeqCst);
     let mut last_send_original = crate::OSC_SEND_ORIGINAL.load(Ordering::SeqCst);
+    let mut last_debug_enabled = crate::DEBUG_ENABLED.load(Ordering::SeqCst);
 
     loop {
         // Prüfe Exit-Flag
         if crate::EXIT_FLAG.load(Ordering::SeqCst) {
-            println!("[MQTT] Shutdown requested, stopping listener");
+            if crate::is_debug_enabled() { println!("[MQTT] Shutdown requested, stopping listener"); }
             break;
         }
 
@@ -361,7 +407,9 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                     }
                 }
                 Ok(Event::Incoming(Incoming::ConnAck(ack))) => {
-                    println!("[MQTT] ConnAck: session_present={}, code={:?}", ack.session_present, ack.code);
+                    if crate::is_debug_enabled() { println!("[MQTT] ConnAck: session_present={}, code={:?}", ack.session_present, ack.code); }
+                    // Mark connected; print green banner after we finished setup below
+                    crate::MQTT_CONNECTED.store(true, Ordering::SeqCst);
 
                     // Beim (Re-)Connect: subscriben und initiale States/Discovery publizieren
                     if let Err(e) = subscribe_to_topics(client, topics) {
@@ -377,13 +425,24 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                     let _ = client.publish(&topics.osc_sending_enabled_state, QoS::AtLeastOnce, true, osc_enabled);
                     let send_orig = if crate::OSC_SEND_ORIGINAL.load(Ordering::SeqCst) { "1" } else { "0" };
                     let _ = client.publish(&topics.osc_send_original_state, QoS::AtLeastOnce, true, send_orig);
+                    let debug_enabled = if crate::DEBUG_ENABLED.load(Ordering::SeqCst) { "1" } else { "0" };
+                    let _ = client.publish(&topics.debug_enabled_state, QoS::AtLeastOnce, true, debug_enabled);
                     // initial state published after ConnAck
+                    // Now that subscriptions and discovery/state publishes are done, show green banner
+                    if crate::MQTT_ENABLED.load(Ordering::SeqCst) {
+                        crate::general::check::print_connections_active();
+                    }
                 }
                 Ok(_) => {
                     // Ignore other events
                 }
                 Err(e) => {
                     eprintln!("[MQTT] Connection error: {} (reconnecting in {}s)", e, RECONNECT_DELAY_SECS);
+                    // On connection error, mark disconnected and show red banner (only if MQTT enabled)
+                    crate::MQTT_CONNECTED.store(false, Ordering::SeqCst);
+                    if crate::MQTT_ENABLED.load(Ordering::SeqCst) {
+                        crate::general::check::print_connections_broken();
+                    }
                     thread::sleep(Duration::from_secs(RECONNECT_DELAY_SECS));
                 }
             }
@@ -425,6 +484,18 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                 if send_original_now { "1" } else { "0" },
             );
             last_send_original = send_original_now;
+        }
+
+        // Publish Debug switch state changes
+        let debug_enabled_now = crate::DEBUG_ENABLED.load(Ordering::SeqCst);
+        if debug_enabled_now != last_debug_enabled {
+            let _ = client.publish(
+                &topics.debug_enabled_state,
+                QoS::AtLeastOnce,
+                true,
+                if debug_enabled_now { "1" } else { "0" },
+            );
+            last_debug_enabled = debug_enabled_now;
         }
 
         // Vermeide Busy-Loop

@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::net::UdpSocket;
 use rosc::{OscMessage, OscPacket, OscType, encoder};
 
+// Access global debug flag from crate root
+use crate::is_debug_enabled;
+
 // MIDI note names for OSC conversion
 const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
@@ -152,7 +155,9 @@ impl OscSender {
         let msg_buf = encoder::encode(&packet)?;
         match self.socket.send(&msg_buf) {
             Ok(bytes_sent) => {
-                println!("[OSC] Sent {} bytes to {}: {}", bytes_sent, self.target_addr, msg.addr);
+                if is_debug_enabled() {
+                    println!("[OSC] Sent {} bytes to {}: {}", bytes_sent, self.target_addr, msg.addr);
+                }
                 Ok(())
             }
             Err(e) => {
@@ -170,18 +175,22 @@ pub fn spawn_osc_sender(
     enable_flag: &'static AtomicBool,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        crate::general::check::mark_osc_sender_started();
         let mut osc_sender = match OscSender::new(&target_addr) {
             Ok(sender) => sender,
             Err(e) => {
                 eprintln!("Failed to create OSC sender: {}", e);
+                crate::general::check::mark_osc_sender_stopped();
                 return;
             }
         };
         
-        if let Ok(local_addr) = osc_sender.socket.local_addr() {
-            println!("OSC sender thread started, local {} -> target {}", local_addr, osc_sender.target_addr);
-        } else {
-            println!("OSC sender thread started, sending to: {}", target_addr);
+        if is_debug_enabled() {
+            if let Ok(local_addr) = osc_sender.socket.local_addr() {
+                println!("OSC sender thread started, local {} -> target {}", local_addr, osc_sender.target_addr);
+            } else {
+                println!("OSC sender thread started, sending to: {}", target_addr);
+            }
         }
         
         loop {
@@ -205,13 +214,17 @@ pub fn spawn_osc_sender(
                     continue;
                 },
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    println!("OSC sender: MIDI receiver disconnected, shutting down");
+                    if is_debug_enabled() {
+                        println!("OSC sender: MIDI receiver disconnected, shutting down");
+                    }
                     break;
                 }
             }
         }
-        
-        println!("OSC sender thread terminated");
+        if is_debug_enabled() {
+            if crate::is_debug_enabled() { println!("OSC sender thread terminated"); }
+            crate::general::check::mark_osc_sender_stopped();
+        }
     })
 }
 
