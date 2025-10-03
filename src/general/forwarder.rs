@@ -13,6 +13,9 @@ pub fn spawn_forwarder(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         for msg in rx {
+            if crate::EXIT_FLAG.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
             if msg.is_empty() {
                 continue;
             }

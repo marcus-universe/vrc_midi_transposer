@@ -194,6 +194,10 @@ pub fn spawn_osc_sender(
         }
         
         loop {
+            // Exit promptly on global shutdown
+            if crate::EXIT_FLAG.load(Ordering::SeqCst) {
+                break;
+            }
             // Check if OSC sending is enabled
             if !enable_flag.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -222,9 +226,9 @@ pub fn spawn_osc_sender(
             }
         }
         if is_debug_enabled() {
-            if crate::is_debug_enabled() { println!("OSC sender thread terminated"); }
-            crate::general::check::mark_osc_sender_stopped();
+            println!("OSC sender thread terminated");
         }
+        crate::general::check::mark_osc_sender_stopped();
     })
 }
 

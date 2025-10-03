@@ -18,10 +18,12 @@ pub fn spawn_stdin_handler() -> thread::JoinHandle<()> {
             let cmd = line.trim();
             if cmd.is_empty() {
                 crate::EXIT_FLAG.store(true, Ordering::SeqCst);
+                crate::MQTT_ENABLED.store(false, Ordering::SeqCst);
                 break;
             }
             if cmd.eq_ignore_ascii_case("exit") || cmd.eq_ignore_ascii_case("quit") || cmd.eq_ignore_ascii_case("q") {
                 crate::EXIT_FLAG.store(true, Ordering::SeqCst);
+                crate::MQTT_ENABLED.store(false, Ordering::SeqCst);
                 break;
             }
             

@@ -5,7 +5,8 @@ use std::sync::atomic::Ordering;
 
 // MQTT Configuration Constants
 const CLIENT_ID: &str = "transposer2025";
-const KEEP_ALIVE_SECS: u64 = 30;
+// Keep-alive kept low so the blocking event loop wakes up promptly and checks EXIT_FLAG on shutdown
+const KEEP_ALIVE_SECS: u64 = 2;
 const RECONNECT_DELAY_SECS: u64 = 1;
 const LOOP_DELAY_MS: u64 = 50;
 // Queue for outgoing MQTT requests (subscribe/publish). Needs to be large enough
@@ -392,6 +393,8 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
         // Prüfe Exit-Flag
         if crate::EXIT_FLAG.load(Ordering::SeqCst) {
             if crate::is_debug_enabled() { println!("[MQTT] Shutdown requested, stopping listener"); }
+            // Versuche sauberes Disconnect, ignorieren bei Fehlern
+            let _ = client.disconnect();
             break;
         }
 
@@ -448,6 +451,7 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
             }
         } else {
             eprintln!("[MQTT] Connection iterator ended");
+            if crate::is_debug_enabled() { println!("[MQTT] Connection iterator ended"); }
             break;
         }
 
@@ -501,4 +505,5 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
         // Vermeide Busy-Loop
         thread::sleep(Duration::from_millis(LOOP_DELAY_MS));
     }
+    if crate::is_debug_enabled() { println!("[MQTT] Listener loop terminated"); }
 }
