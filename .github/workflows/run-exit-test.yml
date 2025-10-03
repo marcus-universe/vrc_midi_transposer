@@ -1,0 +1,33 @@
+name: Run and exit test
+
+on:
+    push:
+        branches: [dev, main]
+    pull_request:
+        branches: [dev, main]
+
+jobs:
+    run-exit:
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Install system dependencies (ALSA)
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libasound2-dev pkg-config
+
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Build
+              run: cargo build --verbose
+
+            - name: Run with CI test mode and ensure it exits
+              env:
+                  CI_TEST_EXIT: "1"
+              run: |
+                  set -e
+                  # Pipe an exit command so the program terminates on its own
+                  printf "exit\n" | cargo run --quiet

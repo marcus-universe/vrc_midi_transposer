@@ -5,6 +5,8 @@ use std::sync::mpsc::channel;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
 use std::time::Duration;
+use std::sync::OnceLock;
+use std::env;
 
 use midir::{Ignore, MidiInput, MidiOutput};
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -182,8 +184,8 @@ static TRANSPOSE_SEMITONES: AtomicI32 = AtomicI32::new(0);
 /// When true the main loop will terminate and the program will shut down.
 static EXIT_FLAG: AtomicBool = AtomicBool::new(false);
 
-/// Global configuration loaded at startup
-static mut GLOBAL_CONFIG: Option<Config> = None;
+/// Global configuration loaded at startup (thread-safe, write-once)
+static GLOBAL_CONFIG: OnceLock<Config> = OnceLock::new();
 
 /// Global debug flag (runtime-togglable). Initialized from config.debug.
 pub(crate) static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
@@ -193,9 +195,7 @@ pub(crate) static CONFIG_LOADED_FROM_FILE: AtomicBool = AtomicBool::new(false);
 
 /// Get the global configuration (must be loaded first)
 pub fn get_config() -> &'static Config {
-    unsafe {
-        GLOBAL_CONFIG.as_ref().expect("Config not loaded")
-    }
+    GLOBAL_CONFIG.get().expect("Config not loaded")
 }
 
 /// Check whether verbose debug logging is enabled
@@ -240,13 +240,45 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Show a nice splash logo at startup
     print_ascii_logo();
 
+    // CI test mode: skip MIDI/OSC/MQTT and only verify clean exit via stdin
+    if env::var("CI_TEST_EXIT").as_deref() == Ok("1") {
+        // Minimal default config sufficient for getters; MQTT disabled to avoid background threads
+        let config = Config {
+            midi: MidiConfig { input_port_name_substr: "".into(), output_port_name_substr: "".into() },
+            osc: OscConfig { ..Default::default() },
+            mqtt: MqttConfig {
+                broker_host: "127.0.0.1".into(),
+                broker_port: 1883,
+                base_topic: "midi_transposer".into(),
+                username: "".into(),
+                password: "".into(),
+                enabled: false,
+            },
+            transpose: TransposeConfig { min: -24, max: 24 },
+            debug: false,
+        };
+        let _ = GLOBAL_CONFIG.set(config.clone());
+        DEBUG_ENABLED.store(config.debug, Ordering::SeqCst);
+        MQTT_ENABLED.store(false, Ordering::SeqCst);
+        TRANSPOSE_SEMITONES.store(0, Ordering::SeqCst);
+        EXIT_FLAG.store(false, Ordering::SeqCst);
+
+        // Only stdin handler; no other threads
+        let stdin_handle = stdin_handler::spawn_stdin_handler();
+        if is_debug_enabled() { println!("[CI] Waiting for exit via stdin..."); }
+        while !EXIT_FLAG.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(50));
+        }
+        println!("Closing connections and exiting...");
+        let _ = stdin_handle.join();
+        return Ok(());
+    }
+
     // Load configuration first
     let config = load_config();
     
     // Store config in global static for other modules to access
-    unsafe {
-        GLOBAL_CONFIG = Some(config.clone());
-    }
+    let _ = GLOBAL_CONFIG.set(config.clone());
     // Initialize runtime debug flag from config
     DEBUG_ENABLED.store(config.debug, Ordering::SeqCst);
     // Inform about config source when debug is enabled
@@ -372,16 +404,38 @@ fn run() -> Result<(), Box<dyn Error>> {
         thread::sleep(Duration::from_millis(100));
     }
 
+    // Proactively disable OSC sending and MQTT to let background threads idle quickly
+    OSC_SENDING_ENABLED.store(false, Ordering::SeqCst);
+    MQTT_ENABLED.store(false, Ordering::SeqCst);
     println!("Closing connections and exiting...");
     // Dropping _conn_in will stop the input callback which will eventually close the sender and end the forward thread
     drop(_conn_in);
     // Join helper threads
+    if is_debug_enabled() { println!("[SHUTDOWN] Joining stdin handler..."); }
     let _ = stdin_handle.join();
+    if is_debug_enabled() { println!("[SHUTDOWN] stdin handler joined"); }
+
+    if is_debug_enabled() { println!("[SHUTDOWN] Joining forwarder..."); }
     let _ = forward_handle.join();
+    if is_debug_enabled() { println!("[SHUTDOWN] forwarder joined"); }
+
+    if is_debug_enabled() { println!("[SHUTDOWN] Joining OSC listener..."); }
     let _ = osc_handle.join();
+    if is_debug_enabled() { println!("[SHUTDOWN] OSC listener joined"); }
+
+    if is_debug_enabled() { println!("[SHUTDOWN] Joining OSC sender (original)..."); }
     let _ = osc_original_handle.join();
+    if is_debug_enabled() { println!("[SHUTDOWN] OSC sender (original) joined"); }
+
+    if is_debug_enabled() { println!("[SHUTDOWN] Joining OSC sender (transposed)..."); }
     let _ = osc_transposed_handle.join();
-    if let Some(h) = mqtt_handle { let _ = h.join(); }
+    if is_debug_enabled() { println!("[SHUTDOWN] OSC sender (transposed) joined"); }
+
+    if let Some(h) = mqtt_handle {
+        if is_debug_enabled() { println!("[SHUTDOWN] Joining MQTT listener..."); }
+        let _ = h.join();
+        if is_debug_enabled() { println!("[SHUTDOWN] MQTT listener joined"); }
+    }
 
     Ok(())
 }
