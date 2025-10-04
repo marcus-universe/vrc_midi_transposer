@@ -39,13 +39,13 @@ pub fn spawn_stdin_handler() -> thread::JoinHandle<()> {
                 continue;
             }
 
-            // OSC commands (accept text and numeric forms)
-            if cmd.eq_ignore_ascii_case("osc on") || cmd.eq_ignore_ascii_case("osc enable") || cmd == "1" {
+            // OSC commands (text-only; numeric input should not affect OSC)
+            if cmd.eq_ignore_ascii_case("osc on") || cmd.eq_ignore_ascii_case("osc enable") {
                 crate::OSC_SENDING_ENABLED.store(true, Ordering::SeqCst);
                 println!("OSC sending enabled");
                 continue;
             }
-            if cmd.eq_ignore_ascii_case("osc off") || cmd.eq_ignore_ascii_case("osc disable") || cmd == "0" {
+            if cmd.eq_ignore_ascii_case("osc off") || cmd.eq_ignore_ascii_case("osc disable") {
                 crate::OSC_SENDING_ENABLED.store(false, Ordering::SeqCst);
                 println!("OSC sending disabled");
                 continue;
