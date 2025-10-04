@@ -1,6 +1,7 @@
 use std::io::stdin;
 use std::thread;
 use std::sync::atomic::Ordering;
+use midir::{MidiInput, MidiOutput};
 
 /// Spawn a thread that reads lines from stdin. Empty line or 'exit' sets the
 /// global `EXIT_FLAG`. A valid integer updates `TRANSPOSE_SEMITONES`.
@@ -95,6 +96,52 @@ pub fn spawn_stdin_handler() -> thread::JoinHandle<()> {
                     }
                 }
             }
+
+            // MIDI device listing commands
+            if cmd.eq_ignore_ascii_case("midi list") || cmd.eq_ignore_ascii_case("midi devices") || cmd.eq_ignore_ascii_case("list midi") {
+                // List MIDI Input devices
+                match MidiInput::new("list-midi-inputs") {
+                    Ok(midi_in) => {
+                        let in_ports = midi_in.ports();
+                        if in_ports.is_empty() {
+                            println!("MIDI Inputs: (keine gefunden)");
+                        } else {
+                            println!("MIDI Inputs:");
+                            for (i, port) in in_ports.iter().enumerate() {
+                                match midi_in.port_name(port) {
+                                    Ok(name) => println!("  [{}] {}", i, name),
+                                    Err(_) => println!("  [{}] <unbekannt>", i),
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Fehler beim Abfragen der MIDI-Inputs: {}", e);
+                    }
+                }
+
+                // List MIDI Output devices
+                match MidiOutput::new("list-midi-outputs") {
+                    Ok(midi_out) => {
+                        let out_ports = midi_out.ports();
+                        if out_ports.is_empty() {
+                            println!("MIDI Outputs: (keine gefunden)");
+                        } else {
+                            println!("MIDI Outputs:");
+                            for (i, port) in out_ports.iter().enumerate() {
+                                match midi_out.port_name(port) {
+                                    Ok(name) => println!("  [{}] {}", i, name),
+                                    Err(_) => println!("  [{}] <unbekannt>", i),
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Fehler beim Abfragen der MIDI-Outputs: {}", e);
+                    }
+                }
+                continue;
+            }
             if cmd.eq_ignore_ascii_case("help") || cmd.eq_ignore_ascii_case("h") {
                 println!("Commands:");
                 println!("  <number>         - Set transpose in semitones");
@@ -102,6 +149,7 @@ pub fn spawn_stdin_handler() -> thread::JoinHandle<()> {
                 println!("  osc off/disable  - Disable OSC sending");
                 println!("  osc original     - Send original input MIDI via OSC");
                 println!("  osc transposed   - Send transposed MIDI via OSC");
+                println!("  midi list        - Show available MIDI input/output devices");
                 println!("  mqtt on/off      - Enable/Disable MQTT listener");
                 println!("  debug on/off     - Enable/Disable verbose debug prints");
                 println!("  help/h           - Show this help");

@@ -1,6 +1,7 @@
 use rumqttc::{Client, Event, Incoming, LastWill, MqttOptions, QoS};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 // MQTT Configuration Constants
@@ -34,10 +35,22 @@ struct MqttTopics {
     // Debug related
     debug_enabled_set: String,
     debug_enabled_state: String,
+    // Dynamic OSC controls
+    osc_control_set: Vec<String>,
+    osc_control_state: Vec<String>,
 }
 
 impl MqttTopics {
     fn new(base_topic: &str) -> Self {
+        // Build dynamic topics from config.osc.sending_addresses
+        let cfg = crate::get_config();
+        let mut dyn_set = Vec::new();
+        let mut dyn_state = Vec::new();
+        for item in &cfg.osc.sending_addresses {
+            let slug = item.name.to_lowercase().replace(' ', "_");
+            dyn_set.push(format!("{}/osc/custom/{}/set", base_topic, slug));
+            dyn_state.push(format!("{}/state/osc/custom/{}", base_topic, slug));
+        }
         Self {
             transpose_set: format!("{}/transpose", base_topic),
             transpose_up: format!("{}/transposeUp", base_topic),
@@ -52,6 +65,8 @@ impl MqttTopics {
             // Debug switch
             debug_enabled_set: format!("{}/debug/enabled", base_topic),
             debug_enabled_state: format!("{}/state/debug/enabled", base_topic),
+            osc_control_set: dyn_set,
+            osc_control_state: dyn_state,
         }
     }
 }
@@ -249,7 +264,64 @@ fn publish_homeassistant_discovery(client: &Client, topics: &MqttTopics) {
         switch_debug_cfg,
     );
 
-    if crate::is_debug_enabled() { println!("[MQTT] Home Assistant Discovery configured"); }
+    // Dynamic controls based on config
+    let cfg = crate::get_config();
+    for (idx, item) in cfg.osc.sending_addresses.iter().enumerate() {
+        let slug = item.name.to_lowercase().replace(' ', "_");
+        match item.ty {
+            crate::OscValueType::Bool => {
+                let cfg_topic = format!("homeassistant/switch/midi_transposer/custom_{}/config", slug);
+                let payload = format!(
+                    r#"{{
+  "name": "{}",
+  "unique_id": "{}_custom_{}",
+  "command_topic": "{}",
+  "state_topic": "{}",
+  "payload_on": "1",
+  "payload_off": "0",
+  "state_on": "1",
+  "state_off": "0",
+  "availability_topic": "{}",
+  "device": {}
+}}"#,
+                    item.name,
+                    CLIENT_ID,
+                    slug,
+                    topics.osc_control_set[idx],
+                    topics.osc_control_state[idx],
+                    topics.availability,
+                    device_json
+                );
+                let _ = client.publish(cfg_topic, QoS::AtLeastOnce, true, payload);
+            }
+            crate::OscValueType::Float => {
+                let cfg_topic = format!("homeassistant/number/midi_transposer/custom_{}/config", slug);
+                let mut body = format!(
+                    r#"{{
+  "name": "{}",
+  "unique_id": "{}_custom_{}",
+  "command_topic": "{}",
+  "state_topic": "{}",
+  "step": 0.01,
+  "availability_topic": "{}",
+  "device": {}"#,
+                    item.name,
+                    CLIENT_ID,
+                    slug,
+                    topics.osc_control_set[idx],
+                    topics.osc_control_state[idx],
+                    topics.availability,
+                    device_json
+                );
+                if let Some(min) = item.min { body.push_str(&format!(",\n  \"min\": {}", min)); }
+                if let Some(max) = item.max { body.push_str(&format!(",\n  \"max\": {}", max)); }
+                body.push_str("\n}");
+                let _ = client.publish(cfg_topic, QoS::AtLeastOnce, true, body);
+            }
+        }
+    }
+
+    if crate::is_debug_enabled() { println!("[MQTT] Home Assistant Discovery configured ({} dynamic controls)", cfg.osc.sending_addresses.len()); }
 }
 
 /// Erstellt MQTT-Optionen mit Konfiguration und Last Will Testament
@@ -280,12 +352,19 @@ fn subscribe_to_topics(client: &Client, topics: &MqttTopics) -> Result<(), Box<d
     // Debug switch
     client.subscribe(&topics.debug_enabled_set, QoS::AtLeastOnce)?;
     
+    // Dynamic OSC controls
+    for set_topic in &topics.osc_control_set {
+        client.subscribe(set_topic, QoS::AtLeastOnce)?;
+    }
+    // Also subscribe to Home Assistant discovery topics for this device to allow cleanup of stale entities
+    client.subscribe("homeassistant/+/midi_transposer/#", QoS::AtLeastOnce)?;
     if crate::is_debug_enabled() {
         println!(
-            "[MQTT] Subscribed to topics: {}, {}, {}, {}, {}, {}", 
+            "[MQTT] Subscribed to topics: {}, {}, {}, {}, {}, {}; +{} dynamic OSC controls", 
             topics.transpose_set, topics.transpose_up, topics.transpose_down,
             topics.osc_sending_enabled_set, topics.osc_send_original_set,
-            topics.debug_enabled_set
+            topics.debug_enabled_set,
+            topics.osc_control_set.len()
         );
     }
     
@@ -376,6 +455,30 @@ fn handle_mqtt_message(
         // Note: This message is intentionally not gated by debug to ensure visibility if enabled
         if crate::is_debug_enabled() { println!("[MQTT] Debug Enabled -> {}", enable); }
         let _ = client.publish(&topics.debug_enabled_state, QoS::AtLeastOnce, true, if enable { "1" } else { "0" });
+    } else {
+        // Dynamic OSC control messages
+        // Find matching index
+        if let Some(idx) = topics.osc_control_set.iter().position(|t| t == topic) {
+            let cfg = &crate::get_config().osc.sending_addresses[idx];
+            match cfg.ty {
+                crate::OscValueType::Bool => {
+                    let on = parse_boolean_payload(payload);
+                    let int_val = if on { 1 } else { 0 };
+                    let target = format!("{}:{}", crate::get_config().osc.sending_addr, crate::get_config().osc.sending_port);
+                    let _ = crate::remote::osc_sender::send_single_osc_message(&cfg.addr, rosc::OscType::Int(int_val), &target);
+                    let _ = client.publish(&topics.osc_control_state[idx], QoS::AtLeastOnce, true, int_val.to_string());
+                }
+                crate::OscValueType::Float => {
+                    let s = std::str::from_utf8(payload).unwrap_or("").trim();
+                    let mut v = s.parse::<f32>().unwrap_or(cfg.default);
+                    if let Some(min) = cfg.min { if v < min { v = min; } }
+                    if let Some(max) = cfg.max { if v > max { v = max; } }
+                    let target = format!("{}:{}", crate::get_config().osc.sending_addr, crate::get_config().osc.sending_port);
+                    let _ = crate::remote::osc_sender::send_single_osc_message(&cfg.addr, rosc::OscType::Float(v), &target);
+                    let _ = client.publish(&topics.osc_control_state[idx], QoS::AtLeastOnce, true, v.to_string());
+                }
+            }
+        }
     }
     
     None
@@ -388,6 +491,12 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
     let mut last_osc_enabled = crate::OSC_SENDING_ENABLED.load(Ordering::SeqCst);
     let mut last_send_original = crate::OSC_SEND_ORIGINAL.load(Ordering::SeqCst);
     let mut last_debug_enabled = crate::DEBUG_ENABLED.load(Ordering::SeqCst);
+
+    // Track HA discovery topics to allow cleanup of removed custom controls
+    let mut expected_custom_discovery: HashSet<String> = HashSet::new();
+    let mut observed_custom_discovery: HashSet<String> = HashSet::new();
+    let mut cleanup_started_at: Option<Instant> = None;
+    const CLEANUP_WINDOW_MS: u64 = 1200; // wait briefly after ConnAck to collect retained discovery topics
 
     loop {
         // Prüfe Exit-Flag
@@ -404,6 +513,10 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                 Ok(Event::Incoming(Incoming::Publish(publish))) => {
                     let topic = publish.topic.as_str();
                     let payload = publish.payload.as_ref();
+                    // Collect retained HA discovery configs for our namespace
+                    if topic.starts_with("homeassistant/") && topic.contains("/midi_transposer/") && topic.contains("/custom_") {
+                        observed_custom_discovery.insert(topic.to_string());
+                    }
                     
                     if let Some(new_value) = handle_mqtt_message(client, topics, topic, payload) {
                         last_state_sent = new_value;
@@ -419,6 +532,28 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                         eprintln!("[MQTT] Subscription failed: {}", e);
                     }
 
+                    // Dynamic topics from config
+                    {
+                        let cfg = crate::get_config();
+                        // Build dynamic topic lists based on sending_addresses
+                        // We publish HA discovery entities for each and subscribe to their set topics.
+                        // We put them under: <base>/osc/custom/<slug>/set and state under <base>/state/osc/custom/<slug>
+                        // Slug: lowercase name with spaces -> '_'
+                        let mut set_topics = Vec::new();
+                        let mut state_topics = Vec::new();
+                        let mut names = Vec::new();
+                        for item in &cfg.osc.sending_addresses {
+                            let slug = item.name.to_lowercase().replace(' ', "_");
+                            let set_t = format!("{}/osc/custom/{}/set", topics.availability.trim_end_matches("/availability"), slug);
+                            let state_t = format!("{}/state/osc/custom/{}", cfg.mqtt.base_topic, slug);
+                            set_topics.push(set_t);
+                            state_topics.push(state_t);
+                            names.push(item.name.clone());
+                        }
+                        // Update topics (unsafe to mutate borrowed; but we own &mut topics? Here we have &MqttTopics)
+                        // Workaround: create local copies to publish discovery/state below; actual subscribe occurs via subscribe_to_topics using topics.osc_control_set
+                        // Populate the vectors inside topics using unsafe cast (not allowed). Instead, rebuild MqttTopics earlier.
+                    }
                     // Discovery und Anfangszustände publizieren (einmal je Start; bei Reconnect erneut okay)
                     publish_homeassistant_discovery(client, topics);
                     let _ = client.publish(&topics.availability, QoS::AtLeastOnce, true, "online");
@@ -430,6 +565,31 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                     let _ = client.publish(&topics.osc_send_original_state, QoS::AtLeastOnce, true, send_orig);
                     let debug_enabled = if crate::DEBUG_ENABLED.load(Ordering::SeqCst) { "1" } else { "0" };
                     let _ = client.publish(&topics.debug_enabled_state, QoS::AtLeastOnce, true, debug_enabled);
+                    // Publish initial states for dynamic OSC controls using configured defaults
+                    let cfg = crate::get_config();
+                    for (idx, item) in cfg.osc.sending_addresses.iter().enumerate() {
+                        match item.ty {
+                            crate::OscValueType::Bool => {
+                                let v = if item.default != 0.0 { "1" } else { "0" };
+                                let _ = client.publish(&topics.osc_control_state[idx], QoS::AtLeastOnce, true, v);
+                            }
+                            crate::OscValueType::Float => {
+                                let mut v = item.default;
+                                if let Some(min) = item.min { if v < min { v = min; } }
+                                if let Some(max) = item.max { if v > max { v = max; } }
+                                let _ = client.publish(&topics.osc_control_state[idx], QoS::AtLeastOnce, true, v.to_string());
+                            }
+                        }
+                    }
+                    // Compute expected HA discovery topics for current custom controls and start cleanup window
+                    expected_custom_discovery.clear();
+                    for item in &cfg.osc.sending_addresses {
+                        let slug = item.name.to_lowercase().replace(' ', "_");
+                        let comp = match item.ty { crate::OscValueType::Bool => "switch", crate::OscValueType::Float => "number" };
+                        expected_custom_discovery.insert(format!("homeassistant/{}/midi_transposer/custom_{}/config", comp, slug));
+                    }
+                    observed_custom_discovery.clear();
+                    cleanup_started_at = Some(Instant::now());
                     // initial state published after ConnAck
                     // Now that subscriptions and discovery/state publishes are done, show green banner
                     if crate::MQTT_ENABLED.load(Ordering::SeqCst) {
@@ -500,6 +660,20 @@ fn run_mqtt_message_loop(mut connection: rumqttc::Connection, client: &Client, t
                 if debug_enabled_now { "1" } else { "0" },
             );
             last_debug_enabled = debug_enabled_now;
+        }
+
+        // After a short window post-ConnAck, cleanup stale HA discovery topics for removed custom controls
+        if let Some(start) = cleanup_started_at {
+            if start.elapsed() >= Duration::from_millis(CLEANUP_WINDOW_MS) {
+                for t in observed_custom_discovery.drain() {
+                    if !expected_custom_discovery.contains(&t) {
+                        if crate::is_debug_enabled() { println!("[MQTT] Cleaning up stale HA discovery topic: {}", t); }
+                        // Publish empty retained payload to delete entity in Home Assistant
+                        let _ = client.publish(t, QoS::AtLeastOnce, true, "");
+                    }
+                }
+                cleanup_started_at = None; // one-time per connection
+            }
         }
 
         // Vermeide Busy-Loop

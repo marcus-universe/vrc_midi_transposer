@@ -74,6 +74,10 @@ pub struct OscConfig {
     pub sending_enabled: bool,
     // Whether to send original (true) or transposed (false) MIDI via OSC at startup
     pub send_original: bool,
+    // Additional OSC addresses to listen to (reserved for future features)
+    pub listening_addresses: Vec<OscListenAddress>,
+    // Additional OSC addresses that can be controlled via MQTT
+    pub sending_addresses: Vec<OscSendAddress>,
 }
 
 impl Default for OscConfig {
@@ -88,8 +92,41 @@ impl Default for OscConfig {
             sending_port: 9000,
             sending_enabled: false,
             send_original: true,
+            listening_addresses: Vec::new(),
+            sending_addresses: Vec::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Extended OSC config types
+// ---------------------------------------------------------------------------
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct OscListenAddress {
+    pub addr: String,
+}
+
+#[derive(Debug, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OscValueType {
+    Bool,
+    Float,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct OscSendAddress {
+    pub name: String,
+    pub addr: String,
+    #[serde(rename = "type")]
+    pub ty: OscValueType,
+    /// Default value; for bool use 0 or 1
+    #[serde(default)]
+    pub default: f32,
+    /// Optional clamp range for float types
+    #[serde(default)]
+    pub min: Option<f32>,
+    #[serde(default)]
+    pub max: Option<f32>,
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -136,6 +173,8 @@ fn load_config() -> Config {
             sending_port: 9000,
             sending_enabled: false,
             send_original: true,
+            listening_addresses: Vec::new(),
+            sending_addresses: Vec::new(),
         },
         mqtt: MqttConfig {
             broker_host: "192.168.50.200".to_string(),
