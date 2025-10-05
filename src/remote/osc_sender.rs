@@ -168,6 +168,30 @@ impl OscSender {
     }
 }
 
+/// Send a single OSC message (addr, value) directly to the configured OSC target.
+/// Bool is represented by 0/1 int. Float uses provided value (no rounding).
+pub fn send_single_osc_message(addr: &str, value: OscType, target_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Bind ephemeral local IPv4 and connect to target
+    let socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
+    let target = if target_addr.trim().is_empty() { "127.0.0.1:9000".to_string() } else { target_addr.to_string() };
+    socket.connect(&target)?;
+    let msg = OscMessage { addr: addr.to_string(), args: vec![value] };
+    let packet = OscPacket::Message(msg.clone());
+    let msg_buf = encoder::encode(&packet)?;
+    match socket.send(&msg_buf) {
+        Ok(bytes_sent) => {
+            if is_debug_enabled() {
+                println!("[OSC] Sent {} bytes to {}: {}", bytes_sent, target, msg.addr);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[OSC] Failed to send to {}: {}", target, e);
+            Err(Box::new(e))
+        }
+    }
+}
+
 /// Spawn OSC sender thread that processes MIDI messages and sends OSC
 pub fn spawn_osc_sender(
     target_addr: String,

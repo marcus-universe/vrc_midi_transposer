@@ -1,0 +1,1237 @@
+{
+    "id": "UniqueID",
+    "name": "MarcusUniverse_Keyboard",
+    "hash": "Hashnumber",
+    "parameters": [
+        {
+            "name": "HUE",
+            "input": {
+                "address": "/avatar/parameters/HUE",
+                "type": "Float"
+            },
+            "output": {
+                "address": "/avatar/parameters/HUE",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "PitchDown",
+            "input": {
+                "address": "/avatar/parameters/PitchDown",
+                "type": "Float"
+            },
+            "output": {
+                "address": "/avatar/parameters/PitchDown",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "PitchUp",
+            "input": {
+                "address": "/avatar/parameters/PitchUp",
+                "type": "Float"
+            },
+            "output": {
+                "address": "/avatar/parameters/PitchUp",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "Glasses",
+            "input": {
+                "address": "/avatar/parameters/Glasses",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/Glasses",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "Sign",
+            "input": {
+                "address": "/avatar/parameters/Sign",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/Sign",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "Headphones",
+            "input": {
+                "address": "/avatar/parameters/Headphones",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/Headphones",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GSHARP7",
+            "input": {
+                "address": "/avatar/parameters/GSHARP7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/GSHARP7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GSHARP6",
+            "input": {
+                "address": "/avatar/parameters/GSHARP6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/GSHARP6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GSHARP5",
+            "input": {
+                "address": "/avatar/parameters/GSHARP5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/GSHARP5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GSHARP4",
+            "input": {
+                "address": "/avatar/parameters/GSHARP4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/GSHARP4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GSHARP3",
+            "input": {
+                "address": "/avatar/parameters/GSHARP3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/GSHARP3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GSHARP2",
+            "input": {
+                "address": "/avatar/parameters/GSHARP2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/GSHARP2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GSHARP1",
+            "input": {
+                "address": "/avatar/parameters/GSHARP1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/GSHARP1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "FSHARP7",
+            "input": {
+                "address": "/avatar/parameters/FSHARP7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/FSHARP7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "FSHARP6",
+            "input": {
+                "address": "/avatar/parameters/FSHARP6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/FSHARP6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "FSHARP5",
+            "input": {
+                "address": "/avatar/parameters/FSHARP5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/FSHARP5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "FSHARP4",
+            "input": {
+                "address": "/avatar/parameters/FSHARP4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/FSHARP4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "FSHARP3",
+            "input": {
+                "address": "/avatar/parameters/FSHARP3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/FSHARP3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "FSHARP2",
+            "input": {
+                "address": "/avatar/parameters/FSHARP2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/FSHARP2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "FSHARP1",
+            "input": {
+                "address": "/avatar/parameters/FSHARP1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/FSHARP1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "DSHARP7",
+            "input": {
+                "address": "/avatar/parameters/DSHARP7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/DSHARP7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "DSHARP6",
+            "input": {
+                "address": "/avatar/parameters/DSHARP6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/DSHARP6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "DSHARP5",
+            "input": {
+                "address": "/avatar/parameters/DSHARP5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/DSHARP5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "DSHARP4",
+            "input": {
+                "address": "/avatar/parameters/DSHARP4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/DSHARP4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "DSHARP3",
+            "input": {
+                "address": "/avatar/parameters/DSHARP3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/DSHARP3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "DSHARP2",
+            "input": {
+                "address": "/avatar/parameters/DSHARP2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/DSHARP2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "DSHARP1",
+            "input": {
+                "address": "/avatar/parameters/DSHARP1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/DSHARP1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "CSHARP7",
+            "input": {
+                "address": "/avatar/parameters/CSHARP7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/CSHARP7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "CSHARP6",
+            "input": {
+                "address": "/avatar/parameters/CSHARP6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/CSHARP6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "CSHARP5",
+            "input": {
+                "address": "/avatar/parameters/CSHARP5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/CSHARP5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "CSHARP4",
+            "input": {
+                "address": "/avatar/parameters/CSHARP4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/CSHARP4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "CSHARP3",
+            "input": {
+                "address": "/avatar/parameters/CSHARP3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/CSHARP3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "CSHARP2",
+            "input": {
+                "address": "/avatar/parameters/CSHARP2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/CSHARP2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "CSHARP1",
+            "input": {
+                "address": "/avatar/parameters/CSHARP1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/CSHARP1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP7",
+            "input": {
+                "address": "/avatar/parameters/ASHARP7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP6",
+            "input": {
+                "address": "/avatar/parameters/ASHARP6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP5",
+            "input": {
+                "address": "/avatar/parameters/ASHARP5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP4",
+            "input": {
+                "address": "/avatar/parameters/ASHARP4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP3",
+            "input": {
+                "address": "/avatar/parameters/ASHARP3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP2",
+            "input": {
+                "address": "/avatar/parameters/ASHARP2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP1",
+            "input": {
+                "address": "/avatar/parameters/ASHARP1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ASHARP0",
+            "input": {
+                "address": "/avatar/parameters/ASHARP0",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/ASHARP0",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "G7",
+            "input": {
+                "address": "/avatar/parameters/G7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/G7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "G6",
+            "input": {
+                "address": "/avatar/parameters/G6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/G6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "G5",
+            "input": {
+                "address": "/avatar/parameters/G5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/G5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "G4",
+            "input": {
+                "address": "/avatar/parameters/G4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/G4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "G3",
+            "input": {
+                "address": "/avatar/parameters/G3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/G3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "G2",
+            "input": {
+                "address": "/avatar/parameters/G2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/G2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "G1",
+            "input": {
+                "address": "/avatar/parameters/G1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/G1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "F7",
+            "input": {
+                "address": "/avatar/parameters/F7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/F7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "F6",
+            "input": {
+                "address": "/avatar/parameters/F6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/F6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "F5",
+            "input": {
+                "address": "/avatar/parameters/F5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/F5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "F4",
+            "input": {
+                "address": "/avatar/parameters/F4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/F4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "F3",
+            "input": {
+                "address": "/avatar/parameters/F3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/F3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "F2",
+            "input": {
+                "address": "/avatar/parameters/F2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/F2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "F1",
+            "input": {
+                "address": "/avatar/parameters/F1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/F1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "E7",
+            "input": {
+                "address": "/avatar/parameters/E7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/E7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "E6",
+            "input": {
+                "address": "/avatar/parameters/E6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/E6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "E5",
+            "input": {
+                "address": "/avatar/parameters/E5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/E5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "E4",
+            "input": {
+                "address": "/avatar/parameters/E4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/E4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "E3",
+            "input": {
+                "address": "/avatar/parameters/E3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/E3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "E2",
+            "input": {
+                "address": "/avatar/parameters/E2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/E2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "E1",
+            "input": {
+                "address": "/avatar/parameters/E1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/E1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "D7",
+            "input": {
+                "address": "/avatar/parameters/D7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/D7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "D6",
+            "input": {
+                "address": "/avatar/parameters/D6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/D6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "D5",
+            "input": {
+                "address": "/avatar/parameters/D5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/D5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "D4",
+            "input": {
+                "address": "/avatar/parameters/D4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/D4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "D3",
+            "input": {
+                "address": "/avatar/parameters/D3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/D3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "D2",
+            "input": {
+                "address": "/avatar/parameters/D2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/D2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "D1",
+            "input": {
+                "address": "/avatar/parameters/D1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/D1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C8",
+            "input": {
+                "address": "/avatar/parameters/C8",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C8",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C7",
+            "input": {
+                "address": "/avatar/parameters/C7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C6",
+            "input": {
+                "address": "/avatar/parameters/C6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C5",
+            "input": {
+                "address": "/avatar/parameters/C5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C4",
+            "input": {
+                "address": "/avatar/parameters/C4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C3",
+            "input": {
+                "address": "/avatar/parameters/C3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C2",
+            "input": {
+                "address": "/avatar/parameters/C2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "C1",
+            "input": {
+                "address": "/avatar/parameters/C1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/C1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B7",
+            "input": {
+                "address": "/avatar/parameters/B7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B6",
+            "input": {
+                "address": "/avatar/parameters/B6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B5",
+            "input": {
+                "address": "/avatar/parameters/B5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B4",
+            "input": {
+                "address": "/avatar/parameters/B4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B3",
+            "input": {
+                "address": "/avatar/parameters/B3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B2",
+            "input": {
+                "address": "/avatar/parameters/B2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B1",
+            "input": {
+                "address": "/avatar/parameters/B1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "B0",
+            "input": {
+                "address": "/avatar/parameters/B0",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/B0",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A7",
+            "input": {
+                "address": "/avatar/parameters/A7",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A7",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A6",
+            "input": {
+                "address": "/avatar/parameters/A6",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A6",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A5",
+            "input": {
+                "address": "/avatar/parameters/A5",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A5",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A4",
+            "input": {
+                "address": "/avatar/parameters/A4",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A4",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A3",
+            "input": {
+                "address": "/avatar/parameters/A3",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A3",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A2",
+            "input": {
+                "address": "/avatar/parameters/A2",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A2",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A1",
+            "input": {
+                "address": "/avatar/parameters/A1",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A1",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "A0",
+            "input": {
+                "address": "/avatar/parameters/A0",
+                "type": "Bool"
+            },
+            "output": {
+                "address": "/avatar/parameters/A0",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "PreviewMode",
+            "output": {
+                "address": "/avatar/parameters/PreviewMode",
+                "type": "Int"
+            }
+        },
+        {
+            "name": "InStation",
+            "output": {
+                "address": "/avatar/parameters/InStation",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "Seated",
+            "output": {
+                "address": "/avatar/parameters/Seated",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "GestureRightWeight",
+            "output": {
+                "address": "/avatar/parameters/GestureRightWeight",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "GestureLeftWeight",
+            "output": {
+                "address": "/avatar/parameters/GestureLeftWeight",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "GestureRight",
+            "output": {
+                "address": "/avatar/parameters/GestureRight",
+                "type": "Int"
+            }
+        },
+        {
+            "name": "GestureLeft",
+            "output": {
+                "address": "/avatar/parameters/GestureLeft",
+                "type": "Int"
+            }
+        },
+        {
+            "name": "Viseme",
+            "output": {
+                "address": "/avatar/parameters/Viseme",
+                "type": "Int"
+            }
+        },
+        {
+            "name": "IsAnimatorEnabled",
+            "output": {
+                "address": "/avatar/parameters/IsAnimatorEnabled",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "IsOnFriendsList",
+            "output": {
+                "address": "/avatar/parameters/IsOnFriendsList",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "EyeHeightAsMeters",
+            "output": {
+                "address": "/avatar/parameters/EyeHeightAsMeters",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "EyeHeightAsPercent",
+            "output": {
+                "address": "/avatar/parameters/EyeHeightAsPercent",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "ScaleModified",
+            "output": {
+                "address": "/avatar/parameters/ScaleModified",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "ScaleFactorInverse",
+            "output": {
+                "address": "/avatar/parameters/ScaleFactorInverse",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "ScaleFactor",
+            "output": {
+                "address": "/avatar/parameters/ScaleFactor",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "VelocityMagnitude",
+            "output": {
+                "address": "/avatar/parameters/VelocityMagnitude",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "Earmuffs",
+            "output": {
+                "address": "/avatar/parameters/Earmuffs",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "Voice",
+            "output": {
+                "address": "/avatar/parameters/Voice",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "MuteSelf",
+            "output": {
+                "address": "/avatar/parameters/MuteSelf",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "VRMode",
+            "output": {
+                "address": "/avatar/parameters/VRMode",
+                "type": "Int"
+            }
+        },
+        {
+            "name": "TrackingType",
+            "output": {
+                "address": "/avatar/parameters/TrackingType",
+                "type": "Int"
+            }
+        },
+        {
+            "name": "Upright",
+            "output": {
+                "address": "/avatar/parameters/Upright",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "AFK",
+            "output": {
+                "address": "/avatar/parameters/AFK",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "Grounded",
+            "output": {
+                "address": "/avatar/parameters/Grounded",
+                "type": "Bool"
+            }
+        },
+        {
+            "name": "AngularY",
+            "output": {
+                "address": "/avatar/parameters/AngularY",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "VelocityZ",
+            "output": {
+                "address": "/avatar/parameters/VelocityZ",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "VelocityY",
+            "output": {
+                "address": "/avatar/parameters/VelocityY",
+                "type": "Float"
+            }
+        },
+        {
+            "name": "VelocityX",
+            "output": {
+                "address": "/avatar/parameters/VelocityX",
+                "type": "Float"
+            }
+        }
+    ]
+}
