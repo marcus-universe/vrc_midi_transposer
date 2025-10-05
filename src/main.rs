@@ -65,6 +65,7 @@ pub struct MidiConfig {
 pub struct OscConfig {
     pub listening_host: String,
     pub listening_port: u16,
+    // Deprecated: kept for backward compatibility. Prefer specifying these via listening_addresses with roles.
     pub transpose_path: String,
     pub transpose_up_path: String,
     pub transpose_down_path: String,
@@ -82,9 +83,21 @@ pub struct OscConfig {
 
 impl Default for OscConfig {
     fn default() -> Self {
+        // Provide default listening addresses with roles for transpose controls
+        let default_listening_addresses = vec![
+            OscListenAddress { addr: "/transpose".to_string(), role: Some(OscListenRole::Transpose) },
+            OscListenAddress { addr: "/transposeUp".to_string(), role: Some(OscListenRole::TransposeUp) },
+            OscListenAddress { addr: "/transposeDown".to_string(), role: Some(OscListenRole::TransposeDown) },
+            // Additional convenience addresses
+            OscListenAddress { addr: "/debug".to_string(), role: Some(OscListenRole::DebugSet) },
+            OscListenAddress { addr: "/midi/list".to_string(), role: Some(OscListenRole::MidiList) },
+            OscListenAddress { addr: "/osc/original".to_string(), role: Some(OscListenRole::OscSendOriginal) },
+            OscListenAddress { addr: "/osc/transposed".to_string(), role: Some(OscListenRole::OscSendTransposed) },
+        ];
         OscConfig {
             listening_host: "127.0.0.1".to_string(),
             listening_port: 9069,
+            // Deprecated fields mirror defaults
             transpose_path: "/transpose".to_string(),
             transpose_up_path: "/transposeUp".to_string(),
             transpose_down_path: "/transposeDown".to_string(),
@@ -92,7 +105,7 @@ impl Default for OscConfig {
             sending_port: 9000,
             sending_enabled: false,
             send_original: true,
-            listening_addresses: Vec::new(),
+            listening_addresses: default_listening_addresses,
             sending_addresses: Vec::new(),
         }
     }
@@ -101,9 +114,24 @@ impl Default for OscConfig {
 // ---------------------------------------------------------------------------
 // Extended OSC config types
 // ---------------------------------------------------------------------------
+#[derive(Debug, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OscListenRole {
+    Transpose,
+    TransposeUp,
+    TransposeDown,
+    DebugSet,
+    MidiList,
+    OscSendOriginal,
+    OscSendTransposed,
+}
+
 #[derive(Debug, serde::Deserialize, Clone)]
 pub struct OscListenAddress {
     pub addr: String,
+    /// Optional role for built-in actions. If omitted, entry is reserved for future/custom features.
+    #[serde(default)]
+    pub role: Option<OscListenRole>,
 }
 
 #[derive(Debug, serde::Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -163,19 +191,7 @@ fn load_config() -> Config {
             input_port_name_substr: "MRCC".to_string(),
             output_port_name_substr: "MIDIOUT7 (MRCC)".to_string(),
         },
-        osc: OscConfig {
-            listening_host: "127.0.0.1".to_string(),
-            listening_port: 9069,
-            transpose_path: "/transpose".to_string(),
-            transpose_up_path: "/transposeUp".to_string(),
-            transpose_down_path: "/transposeDown".to_string(),
-            sending_addr: "127.0.0.1".to_string(),
-            sending_port: 9000,
-            sending_enabled: false,
-            send_original: true,
-            listening_addresses: Vec::new(),
-            sending_addresses: Vec::new(),
-        },
+        osc: OscConfig { ..Default::default() },
         mqtt: MqttConfig {
             broker_host: "192.168.50.200".to_string(),
             broker_port: 1883,

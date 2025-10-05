@@ -79,120 +79,16 @@ Example: create a Bool parameter named `A1` (0.0 = off, 1.0 = on).
 
 ## 6) Local Avatar Config (for local testing)
 
-Warning: editing files in the VRChat LocalAvatarData folder can affect local state. Back up files before changing anything.
-
 1. Windows path (example):
 
 ```
-C:\Users\<YourUserName>\AppData\LocalLow\VRChat\VRChat\LocalAvatarData\
+C:\Users\<YourUserName>\AppData\LocalLow\VRChat\VRChat\OSC\id\Avatars
 ```
 
 2.  Files here are managed by VRChat. If you inspect them, use a plain text editor for JSON-like files only.
 3.  Look for a file named like your avatar blueprint id.
 4.  Edit your parameters: - Verify that your parameter names are present in any parameter lists you inspect. - Make sure the format is right. Here for example is a snippet of a parameter list:
-
-    ```json
-    {
-      "eyeHeight": 0,
-      "legacyFingers": false,
-      "animationParameters": [
-        { "name": "A0", "value": 0 },
-        { "name": "A1", "value": 0 },
-        { "name": "A2", "value": 0 },
-        { "name": "A3", "value": 0 },
-        { "name": "A4", "value": 0 },
-        { "name": "A5", "value": 0 },
-        { "name": "A6", "value": 0 },
-        { "name": "A7", "value": 0 },
-        { "name": "B0", "value": 0 },
-        { "name": "B1", "value": 0 },
-        { "name": "B2", "value": 0 },
-        { "name": "B3", "value": 0 },
-        { "name": "B4", "value": 0 },
-        { "name": "B5", "value": 0 },
-        { "name": "B6", "value": 0 },
-        { "name": "B7", "value": 0 },
-        { "name": "C1", "value": 0 },
-        { "name": "C2", "value": 0 },
-        { "name": "C3", "value": 0 },
-        { "name": "C4", "value": 0 },
-        { "name": "C5", "value": 0 },
-        { "name": "C6", "value": 0 },
-        { "name": "C7", "value": 0 },
-        { "name": "C8", "value": 0 },
-        { "name": "D1", "value": 0 },
-        { "name": "D2", "value": 0 },
-        { "name": "D3", "value": 0 },
-        { "name": "D4", "value": 0 },
-        { "name": "D5", "value": 0 },
-        { "name": "D6", "value": 0 },
-        { "name": "D7", "value": 0 },
-        { "name": "E1", "value": 0 },
-        { "name": "E2", "value": 0 },
-        { "name": "E3", "value": 0 },
-        { "name": "E4", "value": 0 },
-        { "name": "E5", "value": 0 },
-        { "name": "E6", "value": 0 },
-        { "name": "E7", "value": 0 },
-        { "name": "F1", "value": 0 },
-        { "name": "F2", "value": 0 },
-        { "name": "F3", "value": 0 },
-        { "name": "F4", "value": 0 },
-        { "name": "F5", "value": 0 },
-        { "name": "F6", "value": 0 },
-        { "name": "F7", "value": 0 },
-        { "name": "G1", "value": 0 },
-        { "name": "G2", "value": 0 },
-        { "name": "G3", "value": 0 },
-        { "name": "G4", "value": 0 },
-        { "name": "G5", "value": 0 },
-        { "name": "G6", "value": 0 },
-        { "name": "G7", "value": 0 },
-        { "name": "ASHARP0", "value": 0 },
-        { "name": "ASHARP1", "value": 0 },
-        { "name": "ASHARP2", "value": 0 },
-        { "name": "ASHARP3", "value": 0 },
-        { "name": "ASHARP4", "value": 0 },
-        { "name": "ASHARP5", "value": 0 },
-        { "name": "ASHARP6", "value": 0 },
-        { "name": "ASHARP7", "value": 0 },
-        { "name": "CSHARP1", "value": 0 },
-        { "name": "CSHARP2", "value": 0 },
-        { "name": "CSHARP3", "value": 0 },
-        { "name": "CSHARP4", "value": 0 },
-        { "name": "CSHARP5", "value": 0 },
-        { "name": "CSHARP6", "value": 0 },
-        { "name": "CSHARP7", "value": 0 },
-        { "name": "DSHARP1", "value": 0 },
-        { "name": "DSHARP2", "value": 0 },
-        { "name": "DSHARP3", "value": 0 },
-        { "name": "DSHARP4", "value": 0 },
-        { "name": "DSHARP5", "value": 0 },
-        { "name": "DSHARP6", "value": 0 },
-        { "name": "DSHARP7", "value": 0 },
-        { "name": "FSHARP1", "value": 0 },
-        { "name": "FSHARP2", "value": 0 },
-        { "name": "FSHARP3", "value": 0 },
-        { "name": "FSHARP4", "value": 0 },
-        { "name": "FSHARP5", "value": 0 },
-        { "name": "FSHARP6", "value": 0 },
-        { "name": "FSHARP7", "value": 0 },
-        { "name": "GSHARP1", "value": 0 },
-        { "name": "GSHARP2", "value": 0 },
-        { "name": "GSHARP3", "value": 0 },
-        { "name": "GSHARP4", "value": 0 },
-        { "name": "GSHARP5", "value": 0 },
-        { "name": "GSHARP6", "value": 0 },
-        { "name": "GSHARP7", "value": 0 },
-        { "name": "Headphones", "value": 1 },
-        { "name": "Sign", "value": 0 },
-        { "name": "Glasses", "value": 1 },
-        { "name": "PitchUp", "value": 0.100000001490116 },
-        { "name": "PitchDown", "value": 0.100000001490116 },
-        { "name": "HUE", "value": 1 }
-      ]
-    }
-    ```
+    [Example Avatar OSC Json](./example.json)
 
 Do not modify binary files. Incorrect edits may break local VRChat behavior.
 

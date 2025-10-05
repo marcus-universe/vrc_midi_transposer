@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
 // MQTT Configuration Constants
-const CLIENT_ID: &str = "transposer2025";
+const CLIENT_ID: &str = "vrc_midi_transposer";
 // Keep-alive kept low so the blocking event loop wakes up promptly and checks EXIT_FLAG on shutdown
 const KEEP_ALIVE_SECS: u64 = 2;
 const RECONNECT_DELAY_SECS: u64 = 1;
@@ -15,10 +15,10 @@ const LOOP_DELAY_MS: u64 = 50;
 const QUEUE_SIZE: usize = 64;
 
 // Home Assistant Discovery Constants
-const DEVICE_ID: &str = "midi_transposer_transposer2025";
-const DEVICE_NAME: &str = "MIDI Transposer 2025";
-const DEVICE_MANUFACTURER: &str = "MidiTransposer";
-const DEVICE_MODEL: &str = "MidiTransposer";
+const DEVICE_ID: &str = "vrc_midi_transposer";
+const DEVICE_NAME: &str = "VRC MIDI Transposer";
+const DEVICE_MANUFACTURER: &str = "Marcus Universe";
+const DEVICE_MODEL: &str = "VRC MIDI Transposer";
 
 /// Struktur für MQTT Topics
 struct MqttTopics {
