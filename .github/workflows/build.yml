@@ -1,0 +1,325 @@
+# Reusable build matrix: Windows x64, Linux x86_64 and aarch64, macOS universal.
+# Called by release.yml (and through it by ci.yml). Every job only uploads its
+# bundles as an artifact named "bundles-<os>-<arch>"; nothing is published here.
+#
+# All pinned versions and runner labels in this file were checked against their
+# sources on 2026-11-18. Check them again before changing any of them.
+name: Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # https://github.com/oven-sh/bun/releases - bun.lock is the committed lockfile.
+  BUN_VERSION: "1.4.4"
+  # https://nodejs.org/en/about/previous-releases - Node 24 "Krypton" (LTS).
+  # Node runs Vite and the Tauri CLI; bun installs packages and runs scripts.
+  NODE_VERSION: "24.22.3"
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: x86_64-pc-windows-msvc
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          # Without a toolchain argument rustup installs the one pinned in
+          # rust-toolchain.toml (needs rustup 1.28 or newer). The target is
+          # added separately because that form ignores --target.
+          rustup toolchain install --profile minimal --no-self-update
+          rustup target add "$TARGET"
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.TARGET }}
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # There is no package-lock.json; npm caching would fail on that.
+          package-manager-cache: false
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache bun packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the NSIS installer
+        run: bun run build:windows
+
+      - name: Check that the release binary starts
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          "target/$TARGET/release/vrc-midi-transposer.exe" --version
+
+      - name: Collect bundles
+        run: |
+          set -euo pipefail
+          mkdir -p bundles
+          # The file name contains the product name with spaces; release.yml
+          # renames it.
+          find target -type f -path '*/release/bundle/nsis/*-setup.exe' -exec cp -v {} bundles/ \;
+          count="$(find bundles -type f -name '*-setup.exe' | wc -l | tr -d ' ')"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Expected exactly one NSIS installer, found $count"
+            exit 1
+          fi
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundles-windows-x64
+          path: bundles/
+          if-no-files-found: error
+          retention-days: 7
+          # Installers are already compressed.
+          compression-level: 0
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    # Built in the oldest supported Ubuntu so the binaries only need glibc 2.35
+    # and the AppImage bundles WebKitGTK from 22.04. The host image does not
+    # matter; do not move the container to a newer release without a reason.
+    container:
+      image: ubuntu:22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            script: build:linux
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            script: build:linux:arm64
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: ${{ matrix.target }}
+      DEBIAN_FRONTEND: noninteractive
+      # There is no FUSE in the container. The Tauri bundler already passes this
+      # to linuxdeploy; it is set here as well so every nested AppImage tool
+      # (linuxdeploy plugins, appimagetool) unpacks itself instead of mounting.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      # Runs before the checkout so that git exists and actions/checkout makes a
+      # real clone. unzip and xz-utils are needed by setup-bun and setup-node.
+      - name: Install system packages
+        run: |
+          set -euo pipefail
+          apt-get update
+          # Up to librsvg2-dev: https://v2.tauri.app/start/prerequisites/ (Debian).
+          # After that: ALSA headers for midir, then bundling and CI tools.
+          # Recommended packages are installed on purpose: the AppImage picks
+          # up GTK and GIO modules from them.
+          apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            pkg-config \
+            patchelf \
+            git \
+            ca-certificates \
+            unzip \
+            xz-utils
+
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          # The container has no rustup. Install it without a default toolchain,
+          # then the one pinned in rust-toolchain.toml (rustup installs that
+          # when no toolchain argument is given).
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup toolchain install --profile minimal
+          rustup target add "$TARGET"
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache bun packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build deb, rpm and AppImage
+        env:
+          SCRIPT: ${{ matrix.script }}
+        run: bun run "$SCRIPT"
+
+      - name: Check that the release binary starts
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          "target/$TARGET/release/vrc-midi-transposer" --version
+
+      - name: Collect bundles
+        run: |
+          set -euo pipefail
+          mkdir -p bundles
+          # -type f skips the unpacked package folders and the AppDir that the
+          # bundler leaves next to the packages.
+          for kind in deb rpm AppImage; do
+            dir="$(printf '%s' "$kind" | tr '[:upper:]' '[:lower:]')"
+            find target -type f -path "*/release/bundle/$dir/*.$kind" -exec cp -v {} bundles/ \;
+            count="$(find bundles -type f -name "*.$kind" | wc -l | tr -d ' ')"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly one .$kind bundle, found $count"
+              exit 1
+            fi
+          done
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundles-linux-${{ matrix.arch }}
+          path: bundles/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  macos:
+    name: macOS universal
+    # Apple Silicon runner; the Intel half is cross-compiled and both are merged
+    # into one universal binary by the Tauri CLI.
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      TARGET: universal-apple-darwin
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          # Installs the toolchain pinned in rust-toolchain.toml.
+          rustup toolchain install --profile minimal --no-self-update
+          # universal-apple-darwin is not a Rust target: it needs both of these.
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.TARGET }}
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache bun packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      # Ad-hoc signed through bundle.macOS.signingIdentity "-" in
+      # tauri.conf.json; no certificate or secret is involved.
+      - name: Build the app and the dmg
+        run: bun run build:macos
+
+      - name: Check that the release binary starts
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          "target/$TARGET/release/vrc-midi-transposer" --version
+
+      - name: Collect bundles
+        run: |
+          set -euo pipefail
+          mkdir -p bundles
+          # find instead of a ** glob: the system bash on macOS is 3.2.
+          find target -type f -path '*/release/bundle/dmg/*.dmg' -exec cp -v {} bundles/ \;
+          count="$(find bundles -type f -name '*.dmg' | wc -l | tr -d ' ')"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Expected exactly one .dmg, found $count"
+            exit 1
+          fi
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundles-macos-universal
+          path: bundles/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

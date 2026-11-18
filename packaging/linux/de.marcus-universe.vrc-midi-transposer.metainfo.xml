@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2025-2026 Marcus Universe <contact@marcus-universe.de> -->
+<!--
+  AppStream metadata, installed to /usr/share/metainfo/ by the deb, rpm and
+  AppImage bundles (see bundle.linux in src-tauri/tauri.conf.json).
+
+  When releasing: add a <release> entry for the new version at the top of
+  <releases>. Validate with: appstreamcli validate (this file)
+-->
+<component type="desktop-application">
+  <id>de.marcus-universe.vrc-midi-transposer</id>
+
+  <name>VRC MIDI Transposer</name>
+  <summary>Transpose MIDI live, with VRChat OSC and Home Assistant MQTT control</summary>
+
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+
+  <!-- <developer> is the AppStream 1.0 form, <developer_name> the older one.
+       Both are kept so software centres on older distributions show the owner. -->
+  <developer id="de.marcus-universe">
+    <name>Marcus Universe</name>
+  </developer>
+  <developer_name>Marcus Universe</developer_name>
+  <update_contact>contact@marcus-universe.de</update_contact>
+
+  <url type="homepage">https://github.com/marcus-universe/vrc_midi_transposer</url>
+  <url type="bugtracker">https://github.com/marcus-universe/vrc_midi_transposer/issues</url>
+  <url type="vcs-browser">https://github.com/marcus-universe/vrc_midi_transposer</url>
+
+  <description>
+    <p>
+      VRC MIDI Transposer forwards MIDI from an input device to an output device
+      and transposes it live, so a piece can be played in any key without
+      changing the instrument.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Live transposition between a MIDI input and a MIDI output</li>
+      <li>Mirrors the pressed keys to a VRChat avatar over OSC</li>
+      <li>Transpose control from VRChat over OSC</li>
+      <li>Home Assistant integration over MQTT</li>
+      <li>Terminal mode without a window, started with --headless</li>
+    </ul>
+  </description>
+
+  <!-- Must match the desktop file the Tauri bundler installs:
+       /usr/share/applications/<productName>.desktop, where productName is
+       overridden to "vrc-midi-transposer" in src-tauri/tauri.linux.conf.json. -->
+  <launchable type="desktop-id">vrc-midi-transposer.desktop</launchable>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Midi</category>
+    <category>Music</category>
+  </categories>
+
+  <keywords>
+    <keyword>MIDI</keyword>
+    <keyword>transpose</keyword>
+    <keyword>VRChat</keyword>
+    <keyword>OSC</keyword>
+    <keyword>MQTT</keyword>
+    <keyword>Home Assistant</keyword>
+    <keyword>piano</keyword>
+  </keywords>
+
+  <provides>
+    <binary>vrc-midi-transposer</binary>
+  </provides>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="2.0.0" date="2026-11-18">
+      <url type="details">https://github.com/marcus-universe/vrc_midi_transposer/releases/tag/v2.0.0</url>
+      <description>
+        <p>
+          Version 2 is a desktop application with a graphical interface. The
+          terminal mode of version 1 is still available with --headless.
+        </p>
+        <ul>
+          <li>Installers for Windows, macOS and Linux (x86_64 and aarch64)</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

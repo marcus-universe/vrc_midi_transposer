@@ -1,0 +1,327 @@
+# Continuous integration.
+#
+# Every push to dev or main and every pull request: lint, tests, frontend
+# checks and a headless start of the app (Linux), plus the npm install path.
+#
+# Pull requests to main, and manual runs: additionally the full build matrix
+# through a dry run of release.yml, then install tests of the Linux packages.
+#
+# All pinned versions and runner labels in this file were checked against their
+# sources on 2026-11-18. Check them again before changing any of them.
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer run on the same branch or pull request replaces the older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep these two in step with build.yml.
+  BUN_VERSION: "1.4.4"
+  NODE_VERSION: "24.22.3"
+
+jobs:
+  check:
+    name: Lint, test, headless start
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install system packages
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # https://v2.tauri.app/start/prerequisites/ (Debian), then ALSA
+          # headers for midir, pkg-config, and appstream for the metadata check.
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            pkg-config \
+            appstream
+
+      - name: Install Rust toolchain
+        run: |
+          set -euo pipefail
+          # Without a toolchain argument rustup installs the one pinned in
+          # rust-toolchain.toml, with the rustfmt and clippy components listed
+          # there (needs rustup 1.28 or newer).
+          rustup toolchain install --profile minimal --no-self-update
+          rustup show active-toolchain
+          rustc --version
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-x86_64-unknown-linux-gnu
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # There is no package-lock.json; npm caching would fail on that.
+          package-manager-cache: false
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache bun packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Validate the AppStream metadata
+        run: |
+          set -euo pipefail
+          file=packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml
+          out="$(appstreamcli validate --no-net "$file" 2>&1)" || true
+          printf '%s\n' "$out"
+          # The component id equals the Tauri identifier, and the domain
+          # marcus-universe.de has a hyphen. appstreamcli warns about that
+          # (cid-rdns-contains-hyphen) and does not allow downgrading it, so
+          # the exit code cannot be used: fail on any other warning or error.
+          if printf '%s\n' "$out" | grep -E '^[[:space:]]*[EW]: ' | grep -v 'cid-rdns-contains-hyphen'; then
+            echo "::error file=$file::appstreamcli reported problems"
+            exit 1
+          fi
+          # Make sure the validator really ran and looked at the file.
+          printf '%s\n' "$out" | grep -Eq 'cid-rdns-contains-hyphen|Validation was successful'
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check the frontend
+        run: bun run check
+
+      # Must come before anything compiles src-tauri: the Tauri build script
+      # and macros need the frontend "dist" folder to exist.
+      - name: Build the frontend
+        run: bun run build:web
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build the app (debug)
+        run: cargo build -p vrc-midi-transposer
+
+      # No MIDI device, sound server or display exists on the runner; the app
+      # must still start, answer the commands and quit with code 0 on "exit".
+      - name: Headless start
+        run: |
+          set -euo pipefail
+          ./target/debug/vrc-midi-transposer --version
+          printf 'help\n5\nmidi list\nexit\n' \
+            | timeout 60 ./target/debug/vrc-midi-transposer --headless --data-dir "$RUNNER_TEMP/data"
+
+  npm:
+    name: npm install path
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      # bun.lock is the committed lockfile and package-lock.json is ignored by
+      # git, so this is a plain install. It proves that the scripts also work
+      # for contributors who use npm.
+      - name: Install JavaScript dependencies
+        run: npm install
+
+      - name: Build the frontend
+        run: npm run build:web
+
+      - name: Check the frontend
+        run: npm run check
+
+  # Full build matrix and release assembly without creating a release.
+  release-dry-run:
+    name: Release dry run
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.base_ref == 'main')
+    permissions:
+      # release.yml declares "contents: write" for its last job, and a caller
+      # must grant at least what the called workflow asks for, or the run is
+      # rejected. In a dry run that job writes nothing, and for pull requests
+      # from forks GitHub hands out a read-only token regardless.
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      dry_run: true
+
+  package-test:
+    name: Install ${{ matrix.format }} on ${{ matrix.image }} (${{ matrix.arch }})
+    needs: release-dry-run
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.image }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            image: ubuntu:24.04
+            format: deb
+          - arch: x86_64
+            runner: ubuntu-24.04
+            image: debian:12
+            format: deb
+          - arch: x86_64
+            runner: ubuntu-24.04
+            image: fedora:latest
+            format: rpm
+          - arch: x86_64
+            runner: ubuntu-24.04
+            image: archlinux:latest
+            format: AppImage
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: ubuntu:24.04
+            format: deb
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: debian:12
+            format: deb
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: fedora:latest
+            format: rpm
+          # Arch Linux has no official arm64 image, so the aarch64 AppImage
+          # cannot be tested there. Ubuntu stands in so that it is started at
+          # least once.
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            image: ubuntu:24.04
+            format: AppImage
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARCH: ${{ matrix.arch }}
+      FORMAT: ${{ matrix.format }}
+      DEBIAN_FRONTEND: noninteractive
+      # No FUSE in containers: the AppImage unpacks itself to /tmp and runs
+      # from there. Ignored by the deb and rpm installs.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - name: Download the assembled release
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: assets
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          ls -l assets
+          case "$FORMAT" in
+            deb)
+              # Only the declared dependencies, to prove they are sufficient.
+              apt-get update
+              apt-get install -y --no-install-recommends ./assets/*_linux_"$ARCH".deb
+              ;;
+            rpm)
+              dnf install -y ./assets/*_linux_"$ARCH".rpm
+              ;;
+            AppImage)
+              # An AppImage does not bundle the libraries every desktop has
+              # (graphics drivers, fontconfig, ALSA, ...). Install what a
+              # desktop system such as SteamOS provides anyway.
+              if command -v pacman > /dev/null; then
+                pacman -Syu --noconfirm --needed gtk3 alsa-lib mesa
+              else
+                apt-get update
+                apt-get install -y --no-install-recommends \
+                  libgtk-3-0t64 libasound2t64 libegl1 libgl1 libgbm1
+              fi
+              install -m 0755 ./assets/*_linux_"$ARCH".AppImage /usr/local/bin/vrc-midi-transposer
+              ;;
+            *)
+              echo "::error::Unknown format $FORMAT"
+              exit 1
+              ;;
+          esac
+
+      - name: Check the installed files
+        if: ${{ matrix.format != 'AppImage' }}
+        run: |
+          set -euo pipefail
+          if [ "$FORMAT" = deb ]; then
+            dpkg -s vrc-midi-transposer
+            license=/usr/share/doc/vrc-midi-transposer/copyright
+          else
+            rpm -qi vrc-midi-transposer
+            license=/usr/share/licenses/vrc-midi-transposer/LICENSE
+          fi
+          for file in \
+            /usr/bin/vrc-midi-transposer \
+            /usr/share/applications/vrc-midi-transposer.desktop \
+            /usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml \
+            "$license"
+          do
+            if [ ! -f "$file" ]; then
+              echo "::error::Missing after install: $file"
+              exit 1
+            fi
+          done
+          cat /usr/share/applications/vrc-midi-transposer.desktop
+
+      - name: Start the app
+        run: |
+          set -euo pipefail
+          command -v vrc-midi-transposer
+          timeout 60 vrc-midi-transposer --version
+          data="$(mktemp -d)"
+          printf 'help\n5\nmidi list\nexit\n' \
+            | timeout 60 vrc-midi-transposer --headless --data-dir "$data/data"
+
+      # Makes a failed AppImage start readable: lists libraries that the
+      # bundled binary cannot find in this container.
+      - name: Show missing libraries (AppImage, after a failure)
+        if: ${{ failure() && matrix.format == 'AppImage' }}
+        run: |
+          cd "$(mktemp -d)"
+          /usr/local/bin/vrc-midi-transposer --appimage-extract > /dev/null || exit 0
+          LD_LIBRARY_PATH="$PWD/squashfs-root/usr/lib" ldd squashfs-root/usr/bin/vrc-midi-transposer | grep 'not found' || true

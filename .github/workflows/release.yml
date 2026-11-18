@@ -1,0 +1,297 @@
+# Manual release: builds every package and creates a DRAFT GitHub release
+# "v<version>" that the owner reviews and publishes by hand.
+#
+#   gh workflow run release.yml --ref main
+#
+# ci.yml also calls this workflow with dry_run: true. A dry run does everything
+# except creating the release and uploads the assembled files as the artifact
+# "release-assets" instead.
+#
+# The release is created once, by the last job, after every build succeeded.
+# A failed run leaves no release behind.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark the draft as a pre-release
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Build and assemble everything, but do not create the release
+        type: boolean
+        default: false
+
+# Only the last job gets write access, and only to create the release.
+permissions:
+  contents: read
+
+# One real release at a time, never cancelled half-way. Dry runs get a group
+# per ref so they neither block a release nor each other across pull requests.
+# (github.workflow is not used here: in a called workflow it is the caller's
+# name, and sharing the caller's group would deadlock the run.)
+concurrency:
+  group: ${{ inputs.dry_run && format('release-dry-run-{0}', github.ref) || 'release' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Read version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Read the version from Cargo.toml
+        id: version
+        run: |
+          set -euo pipefail
+          # [workspace.package] version in the root Cargo.toml is the source of
+          # truth; tauri.conf.json has no version field.
+          version="$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error file=Cargo.toml::Could not read a version from [workspace.package] (got '$version')"
+            exit 1
+          fi
+
+          # package.json must be bumped together with Cargo.toml.
+          js_version="$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+          if [ "$js_version" != "$version" ]; then
+            echo "::error file=package.json::package.json has version '$js_version' but Cargo.toml has '$version'"
+            exit 1
+          fi
+
+          # The AppStream metadata should list the release; software centres
+          # show it. Not fatal, but worth fixing before publishing.
+          if ! grep -Fq "<release version=\"$version\"" packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml; then
+            echo "::warning file=packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml::No <release version=\"$version\"> entry in the AppStream metadata"
+          fi
+
+          echo "Version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check that the tag and the release do not exist yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          found=""
+
+          # Both answers are stored first so that a failed request fails the
+          # step instead of looking like "does not exist".
+          remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")"
+          if [ -n "$remote_tag" ]; then
+            found="tag $tag"
+          fi
+
+          # With read access this only sees published releases. Drafts are
+          # checked again by the last job, which has write access.
+          releases="$(gh release list --limit 1000 --json tagName --jq '.[].tagName')"
+          if printf '%s\n' "$releases" | grep -Fxq "$tag"; then
+            found="${found:+$found and }release $tag"
+          fi
+
+          if [ -z "$found" ]; then
+            echo "Neither a tag nor a release $tag exists."
+          elif [ "$DRY_RUN" = "true" ]; then
+            # Pull requests that do not bump the version must stay green.
+            echo "::notice::Dry run: $found already exists. A real release would stop here; bump the version first."
+          else
+            echo "::error::The $found already exists. Bump the version in Cargo.toml and package.json, or delete the old tag and release."
+            exit 1
+          fi
+
+  build:
+    name: Build
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+
+  release:
+    name: ${{ inputs.dry_run && 'Assemble release (dry run)' || 'Create draft release' }}
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      # Needed to create the draft release. In a dry run nothing is written.
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      # Each artifact lands in its own folder: artifacts/bundles-<os>-<arch>/
+      - name: Download all bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bundles-*
+          path: artifacts
+
+      - name: Rename the files and write SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          base="vrc-midi-transposer_${VERSION}"
+          mkdir -p release
+
+          # take <artifact> <file pattern> <final name>
+          # Copies the one file in the artifact that matches the pattern.
+          take() {
+            local dir="artifacts/$1" pattern="$2" dest="release/$3" count
+            count="$(find "$dir" -type f -name "$pattern" | wc -l | tr -d ' ')"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly one '$pattern' in $1, found $count"
+              find artifacts -type f | sort
+              exit 1
+            fi
+            find "$dir" -type f -name "$pattern" -exec cp {} "$dest" \;
+          }
+
+          # Names as documented in .claude/skills/release/SKILL.md. No spaces.
+          take bundles-windows-x64 '*-setup.exe' "${base}_windows_x64-setup.exe"
+          take bundles-macos-universal '*.dmg' "${base}_macos_universal.dmg"
+          for arch in x86_64 aarch64; do
+            take "bundles-linux-$arch" '*.deb' "${base}_linux_${arch}.deb"
+            take "bundles-linux-$arch" '*.rpm' "${base}_linux_${arch}.rpm"
+            take "bundles-linux-$arch" '*.AppImage' "${base}_linux_${arch}.AppImage"
+          done
+
+          # Checksums are made from the final names, without a path prefix.
+          (cd release && sha256sum -- vrc-midi-transposer_* > SHA256SUMS.txt)
+
+          count="$(find release -type f | wc -l | tr -d ' ')"
+          if [ "$count" -ne 9 ]; then
+            echo "::error::Expected 8 packages and SHA256SUMS.txt, found $count files"
+            exit 1
+          fi
+          ls -l release
+          cat release/SHA256SUMS.txt
+
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          # Quoted heredoc: nothing in the Markdown is expanded by the shell.
+          # @VERSION@ is filled in below.
+          cat > release-notes.md <<'NOTES'
+          ## What's changed
+
+          _To be written before publishing._
+
+          ## Which file do I need?
+
+          | System | File |
+          |---|---|
+          | Windows 10/11 (x64) | `vrc-midi-transposer_@VERSION@_windows_x64-setup.exe` |
+          | macOS (Intel and Apple Silicon) | `vrc-midi-transposer_@VERSION@_macos_universal.dmg` |
+          | Ubuntu, Debian, Linux Mint | `vrc-midi-transposer_@VERSION@_linux_x86_64.deb` |
+          | Fedora, openSUSE | `vrc-midi-transposer_@VERSION@_linux_x86_64.rpm` |
+          | Arch Linux, SteamOS (Steam Deck), any other Linux | `vrc-midi-transposer_@VERSION@_linux_x86_64.AppImage` |
+          | Linux on ARM64, SteamOS on Steam Frame | the same three as `_linux_aarch64` (`.deb`, `.rpm`, `.AppImage`) |
+
+          The `aarch64` Linux builds (Steam Frame and other ARM64 devices) are **experimental**. Please report problems in the [issue tracker](https://github.com/marcus-universe/vrc_midi_transposer/issues).
+
+          ## First start
+
+          The builds are not signed with a paid certificate, so Windows and macOS ask for confirmation once.
+
+          - **Windows:** SmartScreen shows "Windows protected your PC". Click **More info**, then **Run anyway**.
+          - **macOS:** Open the app once and dismiss the warning, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 14 and older, right-click the app and choose **Open** instead.
+          - **Linux, AppImage:** make the file executable, then start it:
+            ```sh
+            chmod +x vrc-midi-transposer_@VERSION@_linux_x86_64.AppImage
+            ./vrc-midi-transposer_@VERSION@_linux_x86_64.AppImage
+            ```
+            If it reports that FUSE is missing, start it with `--appimage-extract-and-run`.
+          - **Linux, packages:** `sudo apt install ./vrc-midi-transposer_@VERSION@_linux_x86_64.deb` or `sudo dnf install ./vrc-midi-transposer_@VERSION@_linux_x86_64.rpm`.
+
+          ## Verify your download
+
+          `SHA256SUMS.txt` lists the SHA-256 checksum of every file. Download it into the same folder as your file, then:
+
+          ```sh
+          # Linux
+          sha256sum --check --ignore-missing SHA256SUMS.txt
+
+          # macOS
+          shasum -a 256 --check --ignore-missing SHA256SUMS.txt
+          ```
+
+          ```powershell
+          # Windows (PowerShell): compare the output with the line in SHA256SUMS.txt
+          (Get-FileHash .\vrc-midi-transposer_@VERSION@_windows_x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+          ```
+          NOTES
+          sed -i "s/@VERSION@/${VERSION}/g" release-notes.md
+
+          {
+            echo "# VRC MIDI Transposer v${VERSION}"
+            echo
+            echo '```'
+            cat release/SHA256SUMS.txt
+            echo '```'
+            echo
+            cat release-notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the assembled release (dry run)
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Check again that no release exists, drafts included
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          # Drafts are only visible with write access, so the first job could
+          # not see them. Two drafts for one tag would be confusing.
+          releases="$(gh release list --limit 1000 --json tagName --jq '.[].tagName')"
+          if printf '%s\n' "$releases" | grep -Fxq "$tag"; then
+            echo "::error::A release or draft $tag already exists. Delete it, then run this workflow again."
+            exit 1
+          fi
+
+      - name: Create the draft release
+        id: create
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ inputs.prerelease && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          flags=(--draft --target "$GITHUB_SHA" --title "VRC MIDI Transposer $tag" --notes-file release-notes.md)
+          # A version such as 2.1.0-rc.1 is always a pre-release.
+          if [ "$PRERELEASE" = "true" ] || [[ "$VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          # The tag itself is created by GitHub when the draft is published.
+          # gh prints the URL of the draft.
+          gh release create "$tag" "${flags[@]}" release/*
+
+      - name: Remove the partial draft if creating it failed
+        if: ${{ failure() && steps.create.conclusion == 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # The step before made sure no release with this tag existed, so
+          # whatever is there now is the half-uploaded draft from this run.
+          gh release delete "v$VERSION" --yes || true
