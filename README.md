@@ -9,85 +9,68 @@
 </p>
 
 <p align="center">
-VRC_Midi_Transposer is a fast Rust application designed to transpose MIDI signals in real-time with remote control capabilities and to integrate with VRChat's OSC system, Home Assistant via MQTT for flexible MIDI Transposing and avatar piano control in VRC.
+VRC MIDI Transposer transposes MIDI in real time between two devices, mirrors the pressed keys to a VRChat avatar over OSC, and can be remote-controlled from VRChat, Home Assistant (MQTT) or its own console.
 </p>
 
 ## Features
 
-- 🎹 **Real-time MIDI Transposition** - Transpose incoming MIDI notes by semitones (-24 to +24)
-- 🎮 **VRChat OSC Integration** - Control transposition directly from VRChat and control a piano avatar with OSC data [OSC_PARAMETERS.md](docs/OSC_PARAMETERS.md)
-- 🏠 **MQTT Home Assistant Control** - Full integration with Home Assistant for easy remote control
-- 🎵 **MIDI Routing** - Intelligent MIDI input/output port detection and routing
-- 📡 **Multi-Protocol Support** - Supports OSC, MQTT, and direct keyboard input for control
-- ⚡ **Low Latency** - Optimized for real-time performance with minimal delay
-- 🔄 **Live Control** - Change transpose settings on-the-fly without stopping playback
-- 🛠️ **Configurable** - Comprehensive JSON-based configuration system
+- 🎹 **Real-time MIDI transposition** with no stuck notes when the value changes while keys are held
+- 🖥️ **Desktop app** for Windows, Linux (x86_64 and ARM64) and macOS with a dark, lightweight UI
+- 🎛️ **Device selection** from a list, with automatic reconnect when a device is plugged in again
+- 🎮 **VRChat OSC** in both directions: control transposition from VRChat and drive an avatar piano ([OSC_PARAMETERS.md](docs/OSC_PARAMETERS.md))
+- 🏠 **Home Assistant over MQTT** with automatic discovery, including your own custom avatar controls
+- 💾 **Projects** instead of a config file: save, load, duplicate, import and export complete setups
+- ⌨️ **Built-in console** with all commands, plus a `--headless` mode that runs without a window
 
 <img src="./docs/assets/showcase.gif" alt="VRC_Midi_Transposer Screenshot" width="600"/>
 
-## Quick Start
+## Install
 
-1. [Download the latest release](https://github.com/marcus-universe/vrc_midi_transposer/releases) or compile from source
-2. Place the `VRC-Midi-Transposer.exe` and `config.json` in the same folder
-3. Configure your MIDI ports and control settings in `config.json` (see [CONFIG.md](docs/CONFIG.md) for details)
-4. Run the executable: `VRC-Midi-Transposer.exe`
+Download the file for your system from the [latest release](https://github.com/marcus-universe/vrc_midi_transposer/releases).
 
-The application will automatically detect your MIDI devices inside the `config.json` and start listening for control commands.
+| System | File |
+|---|---|
+| Windows 10/11 (64-bit) | `…_windows_x64-setup.exe` |
+| macOS (Intel and Apple Silicon) | `…_macos_universal.dmg` |
+| Ubuntu, Debian, Mint | `…_linux_<arch>.deb` |
+| Fedora, openSUSE | `…_linux_<arch>.rpm` |
+| Arch, SteamOS (Steam Deck: `x86_64`, Steam Frame: `aarch64`), other distributions | `…_linux_<arch>.AppImage` |
 
-## Dependencies & Installation Requirements
+The builds are not signed with a paid certificate:
 
-### For Running the Executable
+- **Windows:** SmartScreen shows a warning on first start. Choose *More info*, then *Run anyway*.
+- **macOS:** right-click the app and choose *Open*, or allow it under *System Settings → Privacy & Security*.
+- **AppImage:** make the file executable (`chmod +x`), then start it.
 
-- **Windows 10/11** (64-bit)
-- **MIDI Interface** - Any MIDI interface or virtual MIDI ports
-- **Network Access** - For OSC and MQTT functionality (optional)
-- **VRChat** - For VRChat OSC integration (optional)
-- **Home Assistant** - For MQTT integration (optional)
+The ARM64 Linux builds are experimental; they are built and install-tested automatically but not tried on every device.
 
-### For Development/Compilation
+## Quick start
 
-- **Rust toolchain**
-- **Visual Studio Build Tools** (for Windows)
-- **Git** (for cloning the repository)
+1. Start the app. It opens a project called *Default*.
+2. On the **Dashboard**, pick your MIDI input and output device.
+3. Play. Change the transpose value with the buttons, the slider, the console, OSC or MQTT.
+4. Optional: enable **OSC sending** to drive a VRChat avatar piano, and set up **MQTT** for Home Assistant.
+5. Press **Save** (Ctrl+S) to keep the setup in the project.
+
+**Coming from version 1.x?** Use *Import* in the project menu and select your old `config.json`. All settings, including listening and sending addresses and the MQTT broker, become a project. OSC paths, MQTT topics and Home Assistant entities are unchanged, so your avatar and dashboards keep working.
 
 ## Documentation
 
-### Configuration & Setup
-
-- **[Configuration Guide](docs/CONFIG.md)** - Complete `config.json` reference including MIDI ports, OSC endpoints, MQTT credentials, and transpose limits
-- **[VRChat Avatar Integration](docs/AVATAR_SETUP.md)** - Setup guide for VRChat avatar piano control
-- **[Build Guide](docs/BUILD_GUIDE.md)** - Step-by-step compilation instructions and troubleshooting
-
-### Control & Usage
-
-- **[Home Assistant Integration Guide](docs/HomeAssistant.md)** – Schritt-für-Schritt-Anleitung zur Einrichtung von MQTT, Mosquitto und Home Assistant
-- **[Control Commands Reference](docs/CONTROL_COMMANDS.md)** – Komplette Liste aller Konsolen-, OSC- und MQTT-Kommandos
-- **[OSC Parameters Reference](docs/OSC_PARAMETERS.md)** – VRChat OSC Parameter Dokumentation
-
-## Quick Control Reference
-
-The application can be controlled through multiple methods:
-
-- **Console Input**: Type numbers or commands directly into the console
-- **OSC Messages**: Send messages to configured OSC paths
-- **MQTT Commands**: Publish to configured MQTT topics for Home Assistant integration
-- **VRChat OSC**: Direct integration with VRChat's OSC system
-
-For the complete command reference including all available console commands, OSC paths, and MQTT topics, see [CONTROL_COMMANDS.md](docs/CONTROL_COMMANDS.md).
+- **[Projects and settings](docs/PROJECTS.md)**: what a project contains, where it is stored, importing a `config.json`, headless mode
+- **[Control commands](docs/CONTROL_COMMANDS.md)**: every console command, OSC path and MQTT topic
+- **[OSC parameters](docs/OSC_PARAMETERS.md)**: what is sent to VRChat
+- **[VRChat avatar setup](docs/AVATAR_SETUP.md)**: building an avatar piano
+- **[Home Assistant](docs/HomeAssistant.md)**: MQTT broker and Home Assistant setup
+- **[Build guide](docs/BUILD_GUIDE.md)**: building from source and making a release
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT, see [LICENSE](LICENSE). Made by Marcus Universe (<contact@marcus-universe.de>).
 
-## Contributing & Support
+## Contributing & support
 
-Thank you for your interest in VRC_Midi_Transposer! 🎵
+If this project is useful to you:
 
-If this project has been helpful to you, please consider:
-
-- ⭐ **Giving it a star** on GitHub to help others discover it
-- 🐛 **Reporting bugs** or suggesting features through GitHub Issues
-- 🔧 **Contributing code** - Pull requests are welcome!
-- 📖 **Improving documentation** - Help make this project more accessible
-
-Your support and contributions help make this project better for the entire community!
+- ⭐ Give it a star so others can find it
+- 🐛 Report bugs or suggest features in the GitHub issues
+- 🔧 Pull requests are welcome

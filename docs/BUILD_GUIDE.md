@@ -1,93 +1,81 @@
 # Build Guide
 
-This guide explains how to compile the VRC MIDI Transposer from source code.
-
-> **Note**: If you just want to use the application, you can [download the pre-built executable](https://github.com/marcus-universe/vrc_midi_transposer/releases) instead of building from source.
+VRC MIDI Transposer is a [Tauri 2](https://tauri.app) app: a Rust engine with a Svelte user interface.
 
 ## Prerequisites
 
-Before building the application, make sure you have the following installed:
+| Tool | Version |
+|---|---|
+| Rust | The version in `rust-toolchain.toml` (installed automatically by `rustup`) |
+| bun **or** Node.js with npm | bun 1.2 or newer, or Node.js 22 or newer |
+| Git | any |
 
-1. **Rust toolchain** - Install from: https://rustup.rs/
-2. **Git** - For cloning the repository
-3. **Visual Studio Build Tools** (Windows) - Required for native dependencies
+Platform extras:
 
-## Getting the Source Code
+- **Windows:** Microsoft C++ Build Tools ("Desktop development with C++") and the WebView2 runtime (part of Windows 11).
+- **macOS:** Xcode Command Line Tools (`xcode-select --install`).
+- **Linux:** the Tauri system packages and the ALSA headers. On Ubuntu or Debian:
 
-Clone the repository and navigate to the project directory:
+  ```sh
+  sudo apt install build-essential curl wget file pkg-config patchelf \
+    libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+    libasound2-dev
+  ```
 
-```bash
+  For other distributions see the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) and add the ALSA development package (`alsa-lib-devel` on Fedora, `alsa-lib` on Arch).
+
+## Get the source
+
+```sh
 git clone https://github.com/marcus-universe/vrc_midi_transposer.git
 cd vrc_midi_transposer
+bun install        # or: npm install
 ```
 
-## Build Commands
+## Run and build
 
-### Debug Build
+Every script works with `bun run` and with `npm run`.
 
-Faster compilation but larger executable size:
+| Command | Result |
+|---|---|
+| `bun run dev` | Start the app with hot reload |
+| `bun run build` | Release build and installer for the system you are on |
+| `bun run build:windows` | Windows setup `.exe` (x64) |
+| `bun run build:linux` | `.deb`, `.rpm` and `.AppImage` (x86_64) |
+| `bun run build:linux:arm64` | The same for ARM64 (run on an ARM64 machine) |
+| `bun run build:macos` | Universal `.dmg` for Intel and Apple Silicon |
+| `bun run test` | Rust tests |
+| `bun run check` | Type-check the user interface |
+| `bun run lint` | Formatting and Clippy |
 
-```bash
-cargo build
+A platform build has to run on that platform; Tauri does not cross-compile between operating systems. The installers end up in `target/release/bundle/` (or `target/<target>/release/bundle/` when a target is given).
+
+For the macOS universal build, add both targets first:
+
+```sh
+rustup target add x86_64-apple-darwin aarch64-apple-darwin
 ```
 
-### Release Build
+### Terminal mode
 
-Optimized build with smaller executable size (recommended for production):
-
-```bash
-cargo build --release
+```sh
+cargo run -p vrc-midi-transposer -- --headless
 ```
 
-### Run from Source
+## Releases
 
-Compile and run directly without creating an executable:
+Releases for all platforms are built by GitHub Actions:
 
-```bash
-cargo run
-```
+1. Set the new version in `Cargo.toml` (`[workspace.package]`) and `package.json`, and merge to `main`.
+2. On GitHub open **Actions → Release → Run workflow**.
+3. The workflow builds Windows, Linux (x86_64 and ARM64) and macOS, writes `SHA256SUMS.txt` and creates a **draft** release named `v<version>`.
+4. Check the draft, edit the notes and publish it.
 
-## Output Locations
+Every pull request to `main` runs the same builds without creating a release, and installs the Linux packages in Ubuntu, Debian, Fedora and Arch containers as a test.
 
-After compilation, you'll find the executable in:
+## Troubleshooting
 
-- **Debug build**: `target/debug/transposer2025.exe`
-- **Release build**: `target/release/transposer2025.exe`
-
-## Build Troubleshooting
-
-### Common Issues
-
-**Missing Visual Studio Build Tools (Windows)**
-If you encounter linking errors, install the Microsoft C++ Build Tools:
-
-- Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/
-- Select "C++ build tools" workload during installation
-
-**Network Dependencies**
-Some dependencies may require network access during the first build. Ensure your firewall allows cargo to download packages.
-
-**Disk Space**
-The target directory can become quite large during development. You can clean it with:
-
-```bash
-cargo clean
-```
-
-## Development Setup
-
-For active development, you might want to:
-
-1. **Enable debug logging** by setting `"debug": true` in your `config.json`
-2. **Use cargo check** for faster syntax checking without compilation:
-   ```bash
-   cargo check
-   ```
-3. **Run tests** (if available):
-   ```bash
-   cargo test
-   ```
-
-## Cross-Platform Notes
-
-While this guide focuses on Windows, the application can potentially be built for other platforms supported by Rust and the MIDI libraries. However, some features may be Windows-specific.
+- **Linux: `alsa` or `webkit2gtk` not found while compiling:** a system package from the list above is missing.
+- **"already running":** only one instance can use a data folder. Close the other one, or pass `--data-dir` with another folder.
+- **Slow first build:** the first build compiles all dependencies; later builds are fast.
+- Do not delete the `target` folder without need if you keep your own build results there.

@@ -1,152 +1,66 @@
 # Control Commands Reference
 
-This document provides a comprehensive reference for all control methods available in the VRC MIDI Transposer.
+Everything that can control VRC MIDI Transposer besides the buttons in the app: the console, OSC messages and MQTT topics.
 
-## Console Commands
+## Console commands
 
-The application accepts commands through the console/terminal. Simply type a command and press Enter.
+Type these in the console drawer at the bottom of the app (Ctrl+`), or in the terminal in headless mode. Commands are not case-sensitive.
 
-### Transpose Control
+| Command | Effect |
+|---|---|
+| `<number>` | Set the transpose value in semitones, for example `5`, `-3`, `0`. Clamped to the range set in the project. |
+| `osc on` / `osc enable` | Enable sending notes to VRChat over OSC |
+| `osc off` / `osc disable` | Disable it |
+| `osc original` / `osc input` | Send the notes as played (original) |
+| `osc transposed` / `osc output` | Send the transposed notes |
+| `osc_original 1`, `osc_original:1`, `osc_original on` | Same as `osc original` (`0` / `off` for transposed) |
+| `midi list` / `midi devices` / `list midi` | List the available MIDI inputs and outputs |
+| `mqtt on` / `mqtt enable` | Start the MQTT client for this session |
+| `mqtt off` / `mqtt disable` | Stop it |
+| `debug on` / `debug enable` | Verbose logging |
+| `debug off` / `debug disable` | Normal logging |
+| `help` / `h` | List the commands |
+| `exit` / `quit` / `q` | Quit |
 
-- `<number>` - Set absolute transpose value in semitones (e.g., `5`, `-3`, `12`)
-- Range: -24 to +24 semitones
+In headless mode an empty line also quits. In the app's console an empty line does nothing.
 
-### OSC Control Commands
+Changes made from the console, OSC or MQTT apply to the running session. They are not written to the project.
 
-- `osc on` / `osc enable` - Enable OSC sending
-- `osc off` / `osc disable` - Disable OSC sending
-- `1` - Enable OSC sending (numeric shortcut)
-- `0` - Disable OSC sending (numeric shortcut)
+## OSC messages (control)
 
-### OSC Data Source Commands
+Send to the listener, by default `127.0.0.1:9069`. The paths below are the defaults of every new project; you can change them and add more under **OSC → Listening addresses**. Only the first argument is read.
 
-Choose whether OSC sends original or transposed MIDI data:
+| Default path | Argument | Effect |
+|---|---|---|
+| `/transpose` | Int or Float (rounded) | Set the transpose value |
+| `/transposeUp` | `1`, `1.0` or `true` | Transpose up by one. Other values are ignored, so a button that sends `0` on release works. |
+| `/transposeDown` | `1`, `1.0` or `true` | Transpose down by one |
+| `/debug` | Number or Bool | Debug logging on (non-zero / true) or off |
+| `/midi/list` | none | Write the MIDI device lists to the console |
+| `/osc/original` | none | Send original notes to VRChat |
+| `/osc/transposed` | none | Send transposed notes to VRChat |
 
-- `osc original` / `osc input` - Send original input MIDI via OSC
-- `osc transposed` / `osc output` - Send transposed MIDI via OSC
+For what the app *sends* to VRChat, see [OSC_PARAMETERS.md](OSC_PARAMETERS.md).
 
-### Advanced OSC Commands
+## MQTT topics
 
-- `osc_original 1` - Force sending original MIDI via OSC
-- `osc_original 0` - Force sending transposed MIDI via OSC
-- `osc_original:1` - Alternative syntax for forcing original MIDI
-- `osc_original on` / `osc_original enable` - Enable original MIDI sending
-- `osc_original off` / `osc_original disable` - Enable transposed MIDI sending
+`midi_transposer` is the default base topic; it can be changed in the project. Booleans accept `1`, `true` or `on` (any case) as on; anything else is off.
 
-### MQTT Control Commands
+| Purpose | Command topic | Payload | State topic (retained) |
+|---|---|---|---|
+| Transpose | `midi_transposer/transpose` | Integer, e.g. `5` | `midi_transposer/state/transpose` |
+| Transpose up | `midi_transposer/transposeUp` | `1` | (updates the transpose state) |
+| Transpose down | `midi_transposer/transposeDown` | `1` | (updates the transpose state) |
+| OSC sending | `midi_transposer/osc/sendingEnabled` | `1` / `0` | `midi_transposer/state/osc/sendingEnabled` |
+| Send original notes | `midi_transposer/osc/sendOriginal` | `1` (original) / `0` (transposed) | `midi_transposer/state/osc/sendOriginal` |
+| Debug | `midi_transposer/debug/enabled` | `1` / `0` | `midi_transposer/state/debug/enabled` |
+| Custom control | `midi_transposer/osc/custom/<slug>/set` | `1` / `0` for a toggle, a number for a slider | `midi_transposer/state/osc/custom/<slug>` |
+| Availability | none | | `midi_transposer/availability` (`online` / `offline`) |
 
-- `mqtt on` / `mqtt enable` - Enable MQTT listener
-- `mqtt off` / `mqtt disable` - Disable MQTT listener
+`<slug>` is the name of the custom control in lower case with spaces replaced by `_`: "Hue Shift" becomes `hue_shift`.
 
-### Debug Commands
+State values are published as `1` / `0` or as plain numbers.
 
-- `debug on` / `debug enable` - Enable verbose debug logging
-- `debug off` / `debug disable` - Disable verbose debug logging
+### Home Assistant
 
-### System Information Commands
-
-- `midi list` / `midi devices` / `list midi` - Show available MIDI input/output devices
-
-### Help and Exit Commands
-
-- `help` / `h` - Show help with available commands
-- `exit` / `quit` / `q` - Exit the program
-- `<empty line>` - Exit the program (press Enter without typing)
-
-## Numeric Shortcuts
-
-For quick control, you can use these numeric shortcuts:
-
-- `1` - Enable OSC sending (equivalent to `osc on`)
-- `0` - Disable OSC sending (equivalent to `osc off`)
-- Any integer between -24 and +24 - Set transpose value directly
-
-## OSC Messages
-
-Send OSC messages to the configured listening port (default: 9069) on the configured host (default: 127.0.0.1).
-
-### Transpose Control Paths
-
-- `/transpose <float>` - Set absolute transpose value (e.g., `/transpose 5.0`)
-- `/transposeUp <float>` - Increase transpose by specified amount (e.g., `/transposeUp 1.0`)
-- `/transposeDown <float>` - Decrease transpose by specified amount (e.g., `/transposeDown 1.0`)
-
-### Configuration
-
-OSC paths can be customized in `config.json`:
-
-```json
-"osc": {
-  "listening_host": "127.0.0.1",
-  "listening_port": 9069,
-  "transpose_path": "/transpose",
-  "transpose_up_path": "/transposeUp",
-  "transpose_down_path": "/transposeDown"
-}
-```
-
-## MQTT Commands
-
-Send commands to the configured MQTT broker using the specified topics.
-
-### Basic Transpose Control
-
-- **Topic**: `midi_transposer/transpose/set`
-- **Payload**: Integer value (-24 to +24)
-- **Example**: `5` (transpose up 5 semitones)
-
-### Relative Transpose Control
-
-- **Topic**: `midi_transposer/transpose/up`
-- **Payload**: `1` (increment)
-- **Topic**: `midi_transposer/transpose/down`
-- **Payload**: `1` (decrement)
-
-### OSC Control via MQTT
-
-- **Topic**: `midi_transposer/osc/sendingEnabled`
-- **Payload**: `ON` or `OFF`
-
-- **Topic**: `midi_transposer/osc/sendOriginal`
-- **Payload**: `ON` (original MIDI) or `OFF` (transposed MIDI)
-
-### Debug Control via MQTT
-
-- **Topic**: `midi_transposer/debug/enabled`
-- **Payload**: `ON` or `OFF`
-
-### Custom OSC Controls
-
-For custom OSC controls defined in config.json:
-
-- **Topic**: `midi_transposer/osc/<control_name>`
-- **Payload**: Depends on control type (boolean: `ON`/`OFF`, float: numeric value)
-
-### State Topics (Read-Only)
-
-The application publishes current state to these topics:
-
-- `midi_transposer/state/transpose` - Current transpose value
-- `midi_transposer/state/osc/sendingEnabled` - OSC sending state
-- `midi_transposer/state/osc/sendOriginal` - OSC data source state
-- `midi_transposer/state/debug/enabled` - Debug mode state
-
-## VRChat OSC Integration
-
-When integrated with VRChat, additional OSC parameters are available for avatar control. See [OSC_PARAMETERS.md](OSC_PARAMETERS.md) for the complete list of VRChat-specific parameters.
-
-## Configuration Override
-
-Many control settings can be pre-configured in `config.json` but can still be changed at runtime using the methods above:
-
-```json
-"osc": {
-  "sending_enabled": false,
-  "send_original": true
-}
-```
-
-- `sending_enabled` (boolean) - Initial OSC sending state
-- `send_original` (boolean) - Initial data source (true = original, false = transposed)
-
-These settings define the startup behavior but can be modified during runtime using console commands, OSC messages, or MQTT commands.
+With MQTT discovery enabled in Home Assistant (the default), a device called **VRC MIDI Transposer** appears automatically with a number for the transpose value, buttons for up and down, switches for OSC sending, the note source and debug, and one switch or number per custom control. See [HomeAssistant.md](HomeAssistant.md) for the broker setup.
