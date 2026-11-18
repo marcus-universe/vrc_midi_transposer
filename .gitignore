@@ -1,13 +1,19 @@
 /target
 
-# Ignore credentials
+# Local configuration and credentials (v1 config files)
 mqtt_credentials.json
 config.json
 
-# Windows build artifacts
+# Build artifacts
 **/*.pdb
 **/*.d
 **/*.exe
+/dist
+node_modules/
+/src-tauri/gen/schemas
+/.tmp
+package-lock.json
 
-# VS Code
+# Editors
 .vscode/
+.claude/settings.local.json

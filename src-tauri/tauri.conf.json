@@ -1,0 +1,77 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "VRC MIDI Transposer",
+  "mainBinaryName": "vrc-midi-transposer",
+  "identifier": "de.marcus-universe.vrc-midi-transposer",
+  "build": {
+    "beforeDevCommand": "vite",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "vite build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "VRC MIDI Transposer",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 940,
+        "minHeight": 600,
+        "visible": false,
+        "theme": "Dark",
+        "backgroundColor": "#121722"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "Marcus Universe",
+    "copyright": "Copyright (c) 2025-2026 Marcus Universe <contact@marcus-universe.de>. MIT License. https://github.com/marcus-universe/vrc_midi_transposer",
+    "category": "Music",
+    "shortDescription": "MIDI transposer with VRChat OSC and Home Assistant MQTT control",
+    "longDescription": "Forwards MIDI from an input device to an output device with live transposition, mirrors pressed keys to a VRChat avatar over OSC, and exposes its controls to Home Assistant over MQTT.",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "homepage": "https://github.com/marcus-universe/vrc_midi_transposer",
+    "linux": {
+      "deb": {
+        "section": "sound",
+        "depends": ["libasound2"],
+        "desktopTemplate": "../packaging/linux/vrc-midi-transposer.desktop",
+        "files": {
+          "/usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml",
+          "/usr/share/doc/vrc-midi-transposer/copyright": "../packaging/linux/copyright"
+        }
+      },
+      "rpm": {
+        "depends": ["alsa-lib"],
+        "desktopTemplate": "../packaging/linux/vrc-midi-transposer.desktop",
+        "files": {
+          "/usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml",
+          "/usr/share/licenses/vrc-midi-transposer/LICENSE": "../LICENSE"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml",
+          "/usr/share/doc/vrc-midi-transposer/copyright": "../packaging/linux/copyright"
+        }
+      }
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

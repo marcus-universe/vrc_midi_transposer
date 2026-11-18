@@ -1,0 +1,37 @@
+{
+  "name": "vrc-midi-transposer",
+  "private": true,
+  "version": "2.0.0",
+  "description": "MIDI transposer with VRChat OSC and Home Assistant MQTT control",
+  "author": "Marcus Universe <contact@marcus-universe.de>",
+  "license": "MIT",
+  "repository": "github:marcus-universe/vrc_midi_transposer",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:web": "vite",
+    "build": "tauri build",
+    "build:web": "vite build",
+    "build:windows": "tauri build --target x86_64-pc-windows-msvc --bundles nsis",
+    "build:linux": "tauri build --target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage",
+    "build:linux:arm64": "tauri build --target aarch64-unknown-linux-gnu --bundles deb,rpm,appimage",
+    "build:macos": "tauri build --target universal-apple-darwin --bundles app,dmg",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "cargo test --workspace",
+    "lint": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.5",
+    "input-switch-polyfill": "1.12.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@tauri-apps/cli": "2.12.6",
+    "@tsconfig/svelte": "5.0.9",
+    "svelte": "5.58.0",
+    "svelte-check": "4.7.8",
+    "typescript": "5.9.3",
+    "vite": "8.3.8"
+  }
+}

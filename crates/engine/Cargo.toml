@@ -1,0 +1,20 @@
+[package]
+name = "transposer-engine"
+description = "MIDI, OSC, MQTT and project engine of VRC MIDI Transposer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+midir = "0.11"
+rosc = "0.11.4"
+rumqttc = { version = "0.25", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+termcolor = "1.4"
+dirs = "7"
+ctrlc = "3.5"
