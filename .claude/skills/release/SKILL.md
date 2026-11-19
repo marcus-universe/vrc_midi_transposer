@@ -82,5 +82,6 @@ On Linux the product name is overridden to `vrc-midi-transposer` (`src-tauri/tau
 ## Changing the build
 
 - Linux is built in an `ubuntu:22.04` container on purpose (old glibc, runs everywhere newer). The system package list is in `build.yml`.
+- The deb depends on `libasound2t64 | libasound2 (>= 1.0.16)`, not plain `libasound2`. On Ubuntu 24.04 and later `libasound2` is only a virtual name, and apt may satisfy it with `liboss4-salsa-asound2`, which lacks the MIDI sequencer functions; the app then fails to start with an undefined `snd_seq_…` symbol. The versioned alternative only matches the real library.
 - Check every version, action and runner label against its source before pinning it; do not rely on memory.
 - A workflow change is done when it has run green on GitHub, not when it looks right.

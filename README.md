@@ -22,7 +22,9 @@ VRC MIDI Transposer transposes MIDI in real time between two devices, mirrors th
 - 💾 **Projects** instead of a config file: save, load, duplicate, import and export complete setups
 - ⌨️ **Built-in console** with all commands, plus a `--headless` mode that runs without a window
 
-<img src="./docs/assets/showcase.gif" alt="VRC_Midi_Transposer Screenshot" width="600"/>
+<img src="./docs/assets/app_screenshot.png" alt="VRC MIDI Transposer dashboard with transpose card, MIDI devices, status, piano and console" width="800"/>
+
+<img src="./docs/assets/showcase.gif" alt="Avatar piano in VRChat driven by VRC MIDI Transposer" width="600"/>
 
 ## Install
 
