@@ -60,7 +60,8 @@ Rules:
 - **Fields:** label above input. Errors appear after interaction (`:user-invalid`), under the field, in words.
 - **Tables (OSC addresses):** rows are editable in place: a role select, a path input, a remove button. An "Add" row action sits under the table. Empty state is one sentence plus the add button.
 - **Dialogs:** native `<dialog>` with `showModal()`. Destructive confirmations name the thing being deleted.
-- **Piano:** 88 keys, A0 to C8. White keys `--key-white`, black keys `--key-black`, pressed keys `--accent` (black pressed keys use `--accent-strong`). C keys carry an octave label.
+- **Piano:** 88 keys, A0 to C8, with the pitch and mod wheel (`Wheels.svelte`) to the left. White keys `--key-white`, black keys `--key-black`. A pressed key shows a blue layer (`::after`) whose opacity follows the velocity (`--v`, 0-1): soft presses are pale, hard presses full `--accent` (black keys a `--accent-strong` gradient). C keys carry an octave label, white on hard presses.
+- **Wheels:** a ridged drum in a dark slot; the surface slides with the value (`--pos`, -1 to 1) and a light marker line shows the position. The pitch wheel has a centre notch.
 - **Console drawer:** `--surface-1`, monospace, bottom of the window, resizable by dragging its top edge. Log colours: default `--text-dim`, success `--ok`, warning `--warn`, error `--err`, banner `--accent`.
 
 ## Layout
@@ -72,8 +73,9 @@ Rules:
 ## Motion
 
 - 120–160 ms ease-out for hover, press and drawer open. Nothing loops.
-- Respect `prefers-reduced-motion`: transitions off.
-- Piano key changes are instant. No transition on key colour; latency reads as lag.
+- Respect `prefers-reduced-motion` per element, not globally (Windows sets it when "Animation effects" is off). Movement goes; fades stay. Regions marked `.motion-safe` keep their transitions: the piano keys (opacity only) and the wheels (they show a live value).
+- Piano keys: the blue fades in within about 45 ms and out over about 200 ms. Opacity only, never layout properties.
+- The transpose number rolls in from the direction of the change (`RollingNumber.svelte`, about 190 ms); with reduced motion it cross-fades.
 
 ## Performance budget
 

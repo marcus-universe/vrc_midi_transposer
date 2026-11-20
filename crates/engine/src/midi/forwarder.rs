@@ -36,8 +36,10 @@ pub trait Sink {
     fn midi(&mut self, bytes: &[u8]);
     fn osc_note(&mut self, note: u8, on: bool);
     fn osc_pitch_bend(&mut self, lsb: u8, msb: u8);
-    /// `half` 0 = input, 1 = output.
-    fn key(&mut self, half: usize, note: u8, on: bool);
+    /// `half` 0 = input, 1 = output. `velocity` 0 releases the key.
+    fn key(&mut self, half: usize, note: u8, velocity: u8);
+    /// Pitch bend 0..=16383 (8192 = centre) and mod wheel 0..=127, for display.
+    fn wheels(&mut self, pitch: Option<u16>, modwheel: Option<u8>);
 }
 
 pub struct Core {
@@ -63,12 +65,12 @@ impl Default for Core {
 }
 
 impl Core {
-    fn press(&mut self, sink: &mut impl Sink, input: u8, output: u8) {
+    fn press(&mut self, sink: &mut impl Sink, input: u8, output: u8, velocity: u8) {
         let (i, o) = (input as usize, output as usize);
         self.in_count[i] = self.in_count[i].saturating_add(1);
         self.out_count[o] = self.out_count[o].saturating_add(1);
-        sink.key(0, input, true);
-        sink.key(1, output, true);
+        sink.key(0, input, velocity);
+        sink.key(1, output, velocity);
         if self.osc_enabled {
             let note = if self.osc_original { input } else { output };
             self.osc_on[note as usize] = true;
@@ -81,10 +83,10 @@ impl Core {
         self.in_count[i] = self.in_count[i].saturating_sub(1);
         self.out_count[o] = self.out_count[o].saturating_sub(1);
         if self.in_count[i] == 0 {
-            sink.key(0, input, false);
+            sink.key(0, input, 0);
         }
         if self.out_count[o] == 0 {
-            sink.key(1, output, false);
+            sink.key(1, output, 0);
         }
         if self.osc_enabled {
             let note = if self.osc_original { input } else { output };
@@ -100,6 +102,12 @@ impl Core {
         };
         let kind = status_byte & 0xF0;
         let channel = status_byte & 0x0F;
+        if kind == 0xB0 && bytes.len() >= 3 && bytes[1] == 1 {
+            // Mod wheel (CC 1): forwarded unchanged, shown on the wheel.
+            sink.midi(bytes);
+            sink.wheels(None, Some(bytes[2] & 0x7F));
+            return;
+        }
         if bytes.len() < 2 || !matches!(kind, 0x80 | 0x90 | 0xA0 | 0xE0) {
             sink.midi(bytes);
             return;
@@ -115,7 +123,7 @@ impl Core {
                     self.release(sink, note, old);
                 }
                 sink.midi(&[status_byte, out, velocity]);
-                self.press(sink, note, out);
+                self.press(sink, note, out, velocity);
             }
             0x80 | 0x90 => {
                 let out = self.held.note_off(channel, note, semitones);
@@ -130,10 +138,14 @@ impl Core {
                 sink.midi(&[status_byte, out, velocity]);
             }
             _ => {
-                // Pitch bend: forwarded unchanged, mirrored to OSC.
+                // Pitch bend: forwarded unchanged, mirrored to OSC and shown on the wheel.
                 sink.midi(bytes);
-                if self.osc_enabled && bytes.len() >= 3 {
-                    sink.osc_pitch_bend(bytes[1], bytes[2]);
+                if bytes.len() >= 3 {
+                    let value = ((bytes[2] as u16 & 0x7F) << 7) | (bytes[1] as u16 & 0x7F);
+                    sink.wheels(Some(value), None);
+                    if self.osc_enabled {
+                        sink.osc_pitch_bend(bytes[1], bytes[2]);
+                    }
                 }
             }
         }
@@ -170,12 +182,13 @@ impl Core {
         self.release_osc(sink);
         for note in 0..128u8 {
             if std::mem::take(&mut self.in_count[note as usize]) > 0 {
-                sink.key(0, note, false);
+                sink.key(0, note, 0);
             }
             if std::mem::take(&mut self.out_count[note as usize]) > 0 {
-                sink.key(1, note, false);
+                sink.key(1, note, 0);
             }
         }
+        sink.wheels(Some(crate::state::PITCH_CENTRE), Some(0));
     }
 }
 
@@ -206,8 +219,18 @@ impl Sink for LiveSink<'_> {
         self.osc.pitch_bend(lsb, msb);
     }
 
-    fn key(&mut self, half: usize, note: u8, on: bool) {
-        self.shared.set_key(half, note, on);
+    fn key(&mut self, half: usize, note: u8, velocity: u8) {
+        self.shared.set_key(half, note, velocity);
+        self.keys_changed = true;
+    }
+
+    fn wheels(&mut self, pitch: Option<u16>, modwheel: Option<u8>) {
+        if let Some(p) = pitch {
+            self.shared.set_pitch(p);
+        }
+        if let Some(m) = modwheel {
+            self.shared.set_mod_wheel(m);
+        }
         self.keys_changed = true;
     }
 }
@@ -264,6 +287,9 @@ mod tests {
         osc: Vec<(u8, bool)>,
         bends: Vec<(u8, u8)>,
         keys: [[bool; 128]; 2],
+        vel: [[u8; 128]; 2],
+        pitch: u16,
+        modw: u8,
     }
 
     impl Default for Rec {
@@ -273,6 +299,9 @@ mod tests {
                 osc: Vec::new(),
                 bends: Vec::new(),
                 keys: [[false; 128]; 2],
+                vel: [[0; 128]; 2],
+                pitch: 8192,
+                modw: 0,
             }
         }
     }
@@ -287,9 +316,43 @@ mod tests {
         fn osc_pitch_bend(&mut self, lsb: u8, msb: u8) {
             self.bends.push((lsb, msb));
         }
-        fn key(&mut self, half: usize, note: u8, on: bool) {
-            self.keys[half][note as usize] = on;
+        fn key(&mut self, half: usize, note: u8, velocity: u8) {
+            self.keys[half][note as usize] = velocity > 0;
+            self.vel[half][note as usize] = velocity;
         }
+        fn wheels(&mut self, pitch: Option<u16>, modwheel: Option<u8>) {
+            if let Some(p) = pitch {
+                self.pitch = p;
+            }
+            if let Some(m) = modwheel {
+                self.modw = m;
+            }
+        }
+    }
+
+    #[test]
+    fn velocity_reaches_both_halves_of_the_display() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.handle(&mut rec, &[0x90, 60, 30], 4);
+        assert_eq!((rec.vel[0][60], rec.vel[1][64]), (30, 30));
+        // Struck again harder without a release: the display follows.
+        core.handle(&mut rec, &[0x90, 60, 120], 4);
+        assert_eq!(rec.vel[0][60], 120);
+        core.handle(&mut rec, &[0x80, 60, 0], 4);
+        core.handle(&mut rec, &[0x80, 60, 0], 4);
+        assert_eq!((rec.vel[0][60], rec.vel[1][64]), (0, 0));
+    }
+
+    #[test]
+    fn wheels_follow_pitch_bend_and_cc1_and_reset_on_panic() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.handle(&mut rec, &[0xE3, 0x7F, 0x7F], 0);
+        core.handle(&mut rec, &[0xB5, 1, 90], 0);
+        core.handle(&mut rec, &[0xB0, 7, 100], 0); // volume, not the mod wheel
+        assert_eq!((rec.pitch, rec.modw), (16383, 90));
+        assert_eq!(rec.midi.len(), 3, "everything is still forwarded");
+        core.panic(&mut rec);
+        assert_eq!((rec.pitch, rec.modw), (8192, 0));
     }
 
     #[test]

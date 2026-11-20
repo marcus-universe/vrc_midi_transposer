@@ -793,10 +793,17 @@ dialog::backdrop {
 /* Motion                                                                   */
 /* ------------------------------------------------------------------------ */
 
+/*
+ * Reduced motion (on Windows this follows "Animation effects" in the system
+ * settings). Movement is switched off, but regions marked .motion-safe keep
+ * their transitions: there they only fade (piano keys) or show the live value
+ * of a control (wheels). The transpose number cross-fades instead of sliding
+ * (RollingNumber.svelte).
+ */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  :where(:not(.motion-safe, .motion-safe *)),
+  :where(:not(.motion-safe, .motion-safe *))::before,
+  :where(:not(.motion-safe, .motion-safe *))::after {
     transition: none !important;
     animation: none !important;
   }

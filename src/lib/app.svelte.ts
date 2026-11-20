@@ -97,7 +97,7 @@ const EMPTY_APP: AppInfo = {
   data_dir: '',
 };
 
-type KeysListener = (keys: readonly number[]) => void;
+type KeysListener = (keys: readonly number[], vel: readonly number[], wheels: readonly [number, number]) => void;
 type LogListener = (added: readonly LogLine[], cleared: boolean) => void;
 
 function errorText(e: unknown): string {
@@ -132,6 +132,10 @@ class AppStore {
   // Not reactive on purpose: the piano and the console subscribe and patch the DOM.
   logs: LogLine[] = [];
   keys: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
+  /** Velocities of the set bits of `keys`, in bit order. */
+  vel: number[] = [];
+  /** [pitch bend 0..16383, mod wheel 0..127] */
+  wheels: [number, number] = [8192, 0];
   /** Set when the user opens the console, so its input takes focus once mounted. */
   focusConsole = false;
 
@@ -161,6 +165,8 @@ class AppStore {
       this.projects = init.projects;
       this.logs = init.logs.slice(-MAX_LOG_LINES);
       this.keys = init.keys;
+      this.vel = init.vel ?? [];
+      this.wheels = init.wheels ?? [8192, 0];
       this.#restoreUi(init.ui);
       this.ready = true;
       this.#emitLogs([], true);
@@ -181,6 +187,8 @@ class AppStore {
     if (frame.cleared || frame.logs?.length) this.#emitLogs(frame.logs ?? [], !!frame.cleared);
     if (frame.keys) {
       this.keys = frame.keys;
+      this.vel = frame.vel ?? [];
+      if (frame.wheels) this.wheels = frame.wheels;
       this.#emitKeys();
     }
     if (frame.close_requested && this.dialog?.kind !== 'quit') this.dialog = { kind: 'quit' };
@@ -199,7 +207,7 @@ class AppStore {
   }
 
   #emitKeys() {
-    for (const fn of this.#keysListeners) fn(this.keys);
+    for (const fn of this.#keysListeners) fn(this.keys, this.vel, this.wheels);
   }
 
   #emitLogs(added: readonly LogLine[], cleared: boolean) {

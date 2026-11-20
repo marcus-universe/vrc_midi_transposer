@@ -216,8 +216,13 @@ function pushSnapshot() {
 }
 
 function pushKeys() {
-  queue({ keys: keyWords() });
+  queue(visual());
 }
+
+/** Velocity per held input note (the demo plays with varying strength). */
+const noteVel = new Map<number, number>();
+/** [pitch bend 0..16383, mod wheel 0..127] */
+let wheels: [number, number] = [8192, 0];
 
 function keyWords(): number[] {
   const words = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -227,6 +232,25 @@ function keyWords(): number[] {
     words[4 + (out >> 5)] = (words[4 + (out >> 5)] | (1 << (out & 31))) >>> 0;
   }
   return words;
+}
+
+/** Same shape as the engine: keys, velocities in bit order, wheels. */
+function visual(): { keys: number[]; vel: number[]; wheels: [number, number] } {
+  const keys = keyWords();
+  const velOf = new Map<number, number>();
+  for (const n of inputNotes) {
+    const v = noteVel.get(n) ?? 100;
+    velOf.set(n, v);
+    const out = clamp(n + session.transpose, 0, 127);
+    velOf.set(128 + out, Math.max(v, velOf.get(128 + out) ?? 0));
+  }
+  const vel: number[] = [];
+  for (let w = 0; w < 8; w++) {
+    for (let bit = 0; bit < 32; bit++) {
+      if ((keys[w] >>> bit) & 1) vel.push(velOf.get((w >> 2) * 128 + (w & 3) * 32 + bit) ?? 100);
+    }
+  }
+  return { keys, vel, wheels: [...wheels] as [number, number] };
 }
 
 /** Same order as the engine: id, then exact name, then name as a substring. */
@@ -408,6 +432,7 @@ function engine(cmd: EngineCmd) {
       break;
     case 'panic':
       inputNotes.clear();
+      wheels = [8192, 0];
       log('warn', 'Panic: all notes released');
       pushKeys();
       break;
@@ -513,6 +538,8 @@ function demoTick() {
   for (const n of next) {
     if (!inputNotes.has(n)) {
       inputNotes.add(n);
+      // Bass soft, melody loud, with some variation.
+      noteVel.set(n, clamp(Math.round(25 + (n - 40) * 2.2 + Math.random() * 25), 10, 127));
       if (session.debug) {
         const out = clamp(n + session.transpose, 0, 127);
         log('debug', `Note On  ${noteName(n)} (${n}) -> ${noteName(out)} (${out})`);
@@ -520,6 +547,22 @@ function demoTick() {
     }
   }
   pushKeys();
+}
+
+/** Moves the wheels now and then so they can be seen working. */
+let wheelTimer: ReturnType<typeof setInterval> | undefined;
+let wheelPhase = 0;
+function wheelTick() {
+  if (!visible) return;
+  wheelPhase++;
+  const cycle = wheelPhase % 160;
+  // A bend up and back during the first 40 ticks of each cycle, the mod wheel rising and falling.
+  const pitch = cycle < 40 ? Math.round(8192 + Math.sin((cycle / 40) * Math.PI) * 6000) : 8192;
+  const modw = Math.round(64 + Math.sin(wheelPhase / 30) * 63);
+  if (pitch !== wheels[0] || modw !== wheels[1]) {
+    wheels = [pitch, modw];
+    pushKeys();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -545,10 +588,15 @@ export async function mockSubscribe(onFrame: (frame: Frame) => void): Promise<In
   pending = null;
 
   clearInterval(demoTimer);
+  clearInterval(wheelTimer);
   if (params.get('demo') !== '0') {
-    for (const n of DEMO_STEPS[1]) inputNotes.add(n);
+    for (const n of DEMO_STEPS[1]) {
+      inputNotes.add(n);
+      noteVel.set(n, 40 + ((n * 7) % 80));
+    }
     demoStep = 2;
     demoTimer = setInterval(demoTick, 900);
+    wheelTimer = setInterval(wheelTick, 50);
   }
   if (params.get('close') === '1') {
     working.osc.target_port = 9001;
@@ -562,7 +610,7 @@ export async function mockSubscribe(onFrame: (frame: Frame) => void): Promise<In
     snapshot: snapshot(),
     ui: loadUi(),
     logs: [...logs],
-    keys: keyWords(),
+    ...visual(),
   };
 }
 
@@ -570,7 +618,7 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
   switch (cmd) {
     case 'set_visible':
       visible = Boolean(args.visible);
-      if (visible) queue({ snap: snapshot(), keys: keyWords() });
+      if (visible) queue({ snap: snapshot(), ...visual() });
       return;
     case 'engine_cmd':
       engine(args.cmd as EngineCmd);

@@ -122,6 +122,16 @@ impl Engine {
         self.shared.keys()
     }
 
+    /// Velocities of the pressed keys in `keys`, in bit order (input words first).
+    pub fn velocities(&self, keys: &[u32; 8]) -> Vec<u8> {
+        self.shared.velocities(keys)
+    }
+
+    /// `[pitch bend 0..=16383 (8192 = centre), mod wheel 0..=127]`.
+    pub fn wheels(&self) -> [u16; 2] {
+        self.shared.wheels()
+    }
+
     /// Like [`Engine::keys`], and re-arms the [`EngineEvent::Keys`] notification.
     pub fn take_keys(&self) -> [u32; 8] {
         self.shared.take_keys()

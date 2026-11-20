@@ -185,6 +185,8 @@ export interface Init extends ProjectState {
   ui: Record<string, unknown>;
   logs: LogLine[];
   keys: number[];
+  vel: number[];
+  wheels: [number, number];
 }
 
 /**
@@ -200,6 +202,13 @@ export interface Frame {
    * `n >> 5` is note `n`.
    */
   keys?: number[];
+  /**
+   * Velocity (1-127) of every key set in `keys`, in bit order: input words
+   * first, lowest note first. Always sent together with `keys`.
+   */
+  vel?: number[];
+  /** `[pitch bend 0..16383 (8192 = centre), mod wheel 0..127]`. Sent together with `keys`. */
+  wheels?: [number, number];
   /** The log was cleared; drop all lines before applying `logs`. */
   cleared?: boolean;
   /** The user tried to close the window with unsaved changes. Ask, then call `quit`. */

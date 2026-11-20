@@ -3,6 +3,7 @@
   import { shortNumber, signed } from '../format';
   import type { MidiStatus, PortInfo, PortRef } from '../ipc';
   import Icon from '../components/Icon.svelte';
+  import RollingNumber from '../components/RollingNumber.svelte';
   import Segmented from '../components/Segmented.svelte';
   import Slider from '../components/Slider.svelte';
   import Switch from '../components/Switch.svelte';
@@ -111,7 +112,7 @@
       >
         <Icon name="minus" size={20} />
       </button>
-      <span class="value num">{signed(shown)}</span>
+      <span class="value num"><RollingNumber value={shown} format={signed} /></span>
       <button
         type="button"
         class="round"

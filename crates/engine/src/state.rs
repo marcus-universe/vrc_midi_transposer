@@ -1,7 +1,7 @@
 //! State shared between the supervisor, the services and the front ends.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,6 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::project::Project;
+
+/// Pitch bend value of a centred wheel.
+pub const PITCH_CENTRE: u16 = 8192;
 
 /// Number of log lines kept for front ends that attach late.
 pub const LOG_CAPACITY: usize = 2000;
@@ -150,6 +153,12 @@ pub struct Shared {
     pub debug: AtomicBool,
     /// Pressed keys: words 0-3 input notes, words 4-7 output notes.
     keys: [AtomicU32; 8],
+    /// Velocity of each pressed key: 0-127 input notes, 128-255 output notes.
+    vel: [AtomicU8; 256],
+    /// Last pitch bend, 0..=16383, 8192 = centre.
+    pitch: AtomicU16,
+    /// Last mod wheel (CC 1) value from any channel.
+    modw: AtomicU8,
     keys_dirty: AtomicBool,
     events: Sender<EngineEvent>,
     log: Mutex<LogBuf>,
@@ -163,6 +172,9 @@ impl Shared {
             transpose: AtomicI32::new(0),
             debug: AtomicBool::new(false),
             keys: Default::default(),
+            vel: std::array::from_fn(|_| AtomicU8::new(0)),
+            pitch: AtomicU16::new(PITCH_CENTRE),
+            modw: AtomicU8::new(0),
             keys_dirty: AtomicBool::new(false),
             events,
             log: Mutex::new(LogBuf {
@@ -254,22 +266,49 @@ impl Shared {
         *lock(&self.project) = project;
     }
 
-    /// `half` 0 = input notes, 1 = output notes.
-    pub fn set_key(&self, half: usize, note: u8, on: bool) {
+    /// `half` 0 = input notes, 1 = output notes. `velocity` 0 releases the key.
+    pub fn set_key(&self, half: usize, note: u8, velocity: u8) {
         let note = (note & 0x7F) as usize;
+        self.vel[half * 128 + note].store(velocity & 0x7F, Ordering::Relaxed);
         let word = &self.keys[half * 4 + (note >> 5)];
         let bit = 1u32 << (note & 31);
-        if on {
+        if velocity > 0 {
             word.fetch_or(bit, Ordering::Relaxed);
         } else {
             word.fetch_and(!bit, Ordering::Relaxed);
         }
     }
 
-    pub fn clear_keys(&self) {
-        for word in &self.keys {
-            word.store(0, Ordering::Relaxed);
+    pub fn set_pitch(&self, value: u16) {
+        self.pitch.store(value.min(16383), Ordering::Relaxed);
+    }
+
+    pub fn set_mod_wheel(&self, value: u8) {
+        self.modw.store(value & 0x7F, Ordering::Relaxed);
+    }
+
+    /// `[pitch bend 0..=16383, mod wheel 0..=127]`.
+    pub fn wheels(&self) -> [u16; 2] {
+        [
+            self.pitch.load(Ordering::Relaxed),
+            self.modw.load(Ordering::Relaxed) as u16,
+        ]
+    }
+
+    /// Velocities of the pressed keys in `keys`, in bit order (input words first).
+    pub fn velocities(&self, keys: &[u32; 8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (w, word) in keys.iter().enumerate() {
+            let mut bits = *word;
+            while bits != 0 {
+                let bit = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                let index = (w / 4) * 128 + (w % 4) * 32 + bit;
+                // Never report 0 for a pressed key; 0 means released.
+                out.push(self.vel[index].load(Ordering::Relaxed).max(1));
+            }
         }
+        out
     }
 
     /// Tell the front end the key bitmap changed. Emits at most one token until it is read.
@@ -287,5 +326,25 @@ impl Shared {
     pub fn take_keys(&self) -> [u32; 8] {
         self.keys_dirty.store(false, Ordering::Release);
         self.keys()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn velocities_follow_the_bit_order() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let shared = Shared::new(tx, Arc::new(Project::default()));
+        shared.set_key(0, 60, 100);
+        shared.set_key(0, 40, 20);
+        shared.set_key(1, 67, 90);
+        let keys = shared.keys();
+        assert_eq!(shared.velocities(&keys), [20, 100, 90]);
+        shared.set_key(0, 40, 0);
+        let keys = shared.keys();
+        assert_eq!(shared.velocities(&keys), [100, 90]);
+        assert_eq!(shared.wheels(), [PITCH_CENTRE, 0]);
     }
 }

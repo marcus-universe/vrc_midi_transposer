@@ -45,6 +45,12 @@ pub struct Frame {
     logs: Vec<LogLine>,
     #[serde(skip_serializing_if = "Option::is_none")]
     keys: Option<[u32; 8]>,
+    /// Velocities of the keys set in `keys`, in bit order. Sent together with `keys`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vel: Option<Vec<u8>>,
+    /// `[pitch bend 0..=16383, mod wheel 0..=127]`. Sent together with `keys`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wheels: Option<[u16; 2]>,
     #[serde(skip_serializing_if = "is_false")]
     cleared: bool,
     #[serde(skip_serializing_if = "is_false")]
@@ -79,6 +85,8 @@ pub struct Init {
     ui: Map<String, Value>,
     logs: Vec<LogLine>,
     keys: [u32; 8],
+    vel: Vec<u8>,
+    wheels: [u16; 2],
 }
 
 #[derive(Deserialize)]
@@ -211,12 +219,21 @@ impl AppState {
         }
     }
 
+    /// Pressed keys, their velocities and the wheels, read together.
+    fn visual(&self) -> ([u32; 8], Vec<u8>, [u16; 2]) {
+        let keys = self.engine.take_keys();
+        (keys, self.engine.velocities(&keys), self.engine.wheels())
+    }
+
     /// Everything, for a webview that just became visible again.
     fn full_frame(&self) -> Frame {
+        let (keys, vel, wheels) = self.visual();
         Frame {
             snap: Some(self.engine.snapshot()),
             logs: self.engine.logs(),
-            keys: Some(self.engine.take_keys()),
+            keys: Some(keys),
+            vel: Some(vel),
+            wheels: Some(wheels),
             cleared: true,
             close_requested: false,
         }
@@ -291,7 +308,10 @@ fn pump(app: AppHandle, events: Receiver<EngineEvent>) {
             frame.snap = Some(state.engine.snapshot());
         }
         if want_keys {
-            frame.keys = Some(state.engine.take_keys());
+            let (keys, vel, wheels) = state.visual();
+            frame.keys = Some(keys);
+            frame.vel = Some(vel);
+            frame.wheels = Some(wheels);
         }
         state.send(frame);
     }
@@ -307,6 +327,7 @@ fn subscribe(state: State<AppState>, channel: Channel<Frame>) -> Init {
     state.visible.store(true, Ordering::Relaxed);
     state.stale.store(false, Ordering::Relaxed);
     let work = lock(&state.work);
+    let (keys, vel, wheels) = state.visual();
     Init {
         state: state.project_state(&work),
         app: AppInfo {
@@ -322,7 +343,9 @@ fn subscribe(state: State<AppState>, channel: Channel<Frame>) -> Init {
         snapshot: state.engine.snapshot(),
         ui: state.store.settings().ui,
         logs: state.engine.logs(),
-        keys: state.engine.take_keys(),
+        keys,
+        vel,
+        wheels,
     }
 }
 
