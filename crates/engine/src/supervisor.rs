@@ -14,6 +14,7 @@ use rosc::OscType;
 
 use crate::command::{self, Command};
 use crate::midi::forwarder::{self, FwdMsg};
+use crate::midi::mapping::{ControlEvent, Mapping};
 use crate::midi::ports::{self, Scanner};
 use crate::midi::MidiBytes;
 use crate::mqtt::topics::custom_payload;
@@ -22,12 +23,16 @@ use crate::osc::listener::{build_routes, ListenerHandle, Routes};
 use crate::osc::out::OscOut;
 use crate::project::{Project, ValueType};
 use crate::state::{
-    now_ms, EngineEvent, Level, MidiConnState, MidiStatus, MqttConnState, PortInfo, ServiceState, Shared,
+    now_ms, EngineEvent, Learned, Level, MidiConnState, MidiStatus, MqttConnState, PortInfo, ServiceState,
+    Shared,
 };
 use crate::{EngineCmd, Source};
 
 /// How often the MIDI port lists are polled for plugged and unplugged devices.
 const SCAN_INTERVAL: Duration = Duration::from_secs(2);
+/// Controls moved by MIDI update the display and MQTT at most this often;
+/// OSC goes out for every message.
+const CONTROL_FLUSH: Duration = Duration::from_millis(50);
 
 pub(crate) struct Supervisor {
     shared: Arc<Shared>,
@@ -58,6 +63,12 @@ pub(crate) struct Supervisor {
     osc_sending: bool,
     send_original: bool,
     custom_values: Vec<f32>,
+    /// Bumped whenever the MIDI mappings change; events from older mappings are ignored.
+    mapping_generation: u64,
+    /// Controls changed by MIDI whose display and MQTT state are not yet updated.
+    custom_dirty: Vec<bool>,
+    custom_flush_at: Option<Instant>,
+    learn_seq: u64,
 
     /// Last overall health announced in the log: `Some(true)` = "Connections active".
     health: Option<bool>,
@@ -92,6 +103,10 @@ impl Supervisor {
             osc_sending: false,
             send_original: true,
             custom_values: Vec::new(),
+            mapping_generation: 0,
+            custom_dirty: Vec::new(),
+            custom_flush_at: None,
+            learn_seq: 0,
             health: None,
         }
     }
@@ -101,11 +116,17 @@ impl Supervisor {
         self.apply_project(initial, true);
 
         loop {
-            let wait = SCAN_INTERVAL.saturating_sub(self.last_scan.elapsed());
+            let mut wait = SCAN_INTERVAL.saturating_sub(self.last_scan.elapsed());
+            if let Some(at) = self.custom_flush_at {
+                wait = wait.min(at.saturating_duration_since(Instant::now()));
+            }
             match rx.recv_timeout(wait) {
                 Ok(EngineCmd::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
                 Ok(cmd) => self.handle(cmd),
                 Err(RecvTimeoutError::Timeout) => {}
+            }
+            if self.custom_flush_at.is_some_and(|at| Instant::now() >= at) {
+                self.flush_custom();
             }
             if self.last_scan.elapsed() >= SCAN_INTERVAL {
                 self.rescan();
@@ -126,6 +147,12 @@ impl Supervisor {
             EngineCmd::SetDebug(on, source) => self.set_debug(on, source),
             EngineCmd::SetMqttEnabled(on) => self.set_mqtt_enabled(on),
             EngineCmd::CustomOsc { index, value, source } => self.custom_osc(index, value, source),
+            EngineCmd::MidiLearn(index) => self.midi_learn(index),
+            EngineCmd::MidiControl { generation, event } => {
+                if generation == self.mapping_generation {
+                    self.midi_control(event);
+                }
+            }
             EngineCmd::Console(line) => self.console(&line),
             EngineCmd::Log(level, text) => self.shared.log(level, text),
             EngineCmd::ClearLog => self.shared.clear_log(),
@@ -166,7 +193,7 @@ impl Supervisor {
             Source::Mqtt => self
                 .shared
                 .debug_log(|| format!("[MQTT] Transpose {old} -> {clamped}")),
-            Source::Ui => {}
+            Source::Ui | Source::Midi => {}
         }
         // Home Assistant expects an answer to its own command even if nothing changed.
         if old != clamped || source == Source::Mqtt {
@@ -197,7 +224,7 @@ impl Supervisor {
             Source::Console => self.shared.info(text),
             Source::Mqtt => self.shared.debug_log(|| format!("[MQTT] {text}")),
             Source::Osc => self.shared.debug_log(|| format!("[OSC] {text}")),
-            Source::Ui => {}
+            Source::Ui | Source::Midi => {}
         }
         if changed || source == Source::Mqtt {
             if let Some(mqtt) = &self.mqtt {
@@ -220,7 +247,7 @@ impl Supervisor {
             Source::Console => self.shared.info(format!("OSC sending {text}")),
             Source::Osc => self.shared.info(format!("[OSC] Sending {text}")),
             Source::Mqtt => self.shared.debug_log(|| format!("[MQTT] OSC sending {text}")),
-            Source::Ui => {}
+            Source::Ui | Source::Midi => {}
         }
         if changed || source == Source::Mqtt {
             if let Some(mqtt) = &self.mqtt {
@@ -237,7 +264,7 @@ impl Supervisor {
             Source::Console => self.shared.info(text),
             Source::Osc => self.shared.info(format!("[OSC] {text}")),
             Source::Mqtt => self.shared.info(format!("[MQTT] {text}")),
-            Source::Ui => {}
+            Source::Ui | Source::Midi => {}
         }
         if changed || source == Source::Mqtt {
             if let Some(mqtt) = &self.mqtt {
@@ -261,6 +288,16 @@ impl Supervisor {
         if let Some(slot) = self.custom_values.get_mut(index) {
             *slot = value;
         }
+        if source == Source::Midi {
+            // A turning knob sends many messages: OSC went out above; the
+            // display and MQTT follow at most every CONTROL_FLUSH.
+            if let Some(dirty) = self.custom_dirty.get_mut(index) {
+                *dirty = true;
+            }
+            self.custom_flush_at
+                .get_or_insert_with(|| Instant::now() + CONTROL_FLUSH);
+            return;
+        }
         if let Some(mqtt) = &self.mqtt {
             mqtt.publish_custom(index, custom_payload(control, value));
         }
@@ -275,6 +312,54 @@ impl Supervisor {
         }
         let values = self.custom_values.clone();
         self.shared.update(|s| s.custom_values = values);
+    }
+
+    /// Publish the controls MIDI changed since the last flush.
+    fn flush_custom(&mut self) {
+        self.custom_flush_at = None;
+        let project = self.project.clone();
+        for (index, dirty) in self.custom_dirty.iter_mut().enumerate() {
+            if std::mem::take(dirty) {
+                if let (Some(mqtt), Some(control), Some(value)) = (
+                    &self.mqtt,
+                    project.osc.sending_addresses.get(index),
+                    self.custom_values.get(index),
+                ) {
+                    mqtt.publish_custom(index, custom_payload(control, *value));
+                }
+            }
+        }
+        let values = self.custom_values.clone();
+        self.shared.update(|s| s.custom_values = values);
+    }
+
+    fn midi_control(&mut self, event: ControlEvent) {
+        match event {
+            ControlEvent::Set { index, value } => self.custom_osc(index, value, Source::Midi),
+            ControlEvent::Toggle { index } => {
+                let Some(control) = self.project.osc.sending_addresses.get(index) else {
+                    return;
+                };
+                let (min, max) = control.range();
+                let current = self.custom_values.get(index).copied().unwrap_or(min);
+                let next = if current > min { min } else { max };
+                self.custom_osc(index, next, Source::Midi);
+            }
+            ControlEvent::Learned { index, trigger } => {
+                self.learn_seq += 1;
+                let seq = self.learn_seq;
+                self.shared.update(|s| {
+                    s.learning = None;
+                    s.learned = Some(Learned { seq, index, trigger });
+                });
+            }
+        }
+    }
+
+    fn midi_learn(&mut self, index: Option<usize>) {
+        let index = index.filter(|i| *i < self.project.osc.sending_addresses.len());
+        let _ = self.fwd_tx.send(FwdMsg::Learn(index));
+        self.shared.update(|s| s.learning = index);
     }
 
     // -- Console --------------------------------------------------------------
@@ -396,12 +481,35 @@ impl Supervisor {
                 })
                 .collect();
             self.custom_values = values;
+            self.custom_dirty = vec![false; self.custom_values.len()];
+            self.custom_flush_at = None;
+            // Control indexes may have moved: start a new mapping generation.
+            self.mapping_generation += 1;
+            let _ = self.fwd_tx.send(FwdMsg::SetMappings(
+                Mapping::from_controls(&new.osc.sending_addresses),
+                self.mapping_generation,
+            ));
+            if load {
+                let _ = self.fwd_tx.send(FwdMsg::Learn(None));
+                self.shared.update(|s| s.learning = None);
+            }
         }
+        // MIDI triggers do not concern MQTT; only the rest of a control does.
+        let strip = |list: &[crate::project::SendAddress]| {
+            list.iter()
+                .map(|c| crate::project::SendAddress {
+                    midi: None,
+                    ..c.clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        let mqtt_controls_changed =
+            controls_changed && strip(&old.osc.sending_addresses) != strip(&new.osc.sending_addresses);
 
         // MQTT: anything that changes the connection, the topics or the discovery documents.
         let mqtt_changed = load
             || old.mqtt != new.mqtt
-            || controls_changed
+            || mqtt_controls_changed
             || old.transpose != new.transpose
             || self.mqtt_enabled != self.mqtt.is_some();
         if mqtt_changed {

@@ -49,6 +49,18 @@ UDP, default target `127.0.0.1:9000`. Sent only while OSC sending is enabled. Th
 
 Each entry: `name`, `addr`, `type` (`bool` or `float`), `default`, optional `min`/`max`. Setting a value sends one message to `addr`: Bool as Int `0`/`1`, Float as Float clamped to min/max. Custom controls are sent whether or not note sending is enabled.
 
+### Custom controls triggered by MIDI
+
+A control may have a `midi` trigger: `kind` (`cc`, `note`, `program`), `channel` (1-16, or any when absent), `number` (0-127), `mode` (`toggle` or `momentary`, notes only) and `forward`.
+
+- Matching uses the **incoming** message, before transposing.
+- CC on a float control: `min + value/127 · (max − min)` (missing min/max count as 0 and 1). CC on a bool control: on at 64 and above. Repeated identical CC values are ignored.
+- Note, `toggle`: each Note On flips the control between its lowest and highest value. Note, `momentary`: on while held.
+- Program Change flips the control.
+- Without `forward` a matching message goes nowhere else (no MIDI out, no keyboard display, no OSC note). A Note Off for a note that is still sounding is always passed on.
+- OSC is sent for every message; the display and MQTT state follow at most every 50 ms.
+- MIDI Learn takes the next Note On, CC or Program Change (with its channel) as the trigger.
+
 ## MQTT
 
 Client id `vrc_midi_transposer`. Plain TCP. `<b>` is the project's base topic (default `midi_transposer`). All state publishes are QoS 1 and retained.

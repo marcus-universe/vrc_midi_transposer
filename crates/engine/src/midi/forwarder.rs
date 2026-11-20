@@ -12,6 +12,7 @@ use std::thread::{self, JoinHandle};
 use midir::MidiOutputConnection;
 
 use super::held_notes::{transposed, HeldNotes};
+use super::mapping::{ControlEvent, Mapping, Mappings};
 use super::MidiBytes;
 use crate::osc::out::OscOut;
 use crate::state::Shared;
@@ -28,6 +29,10 @@ pub enum FwdMsg {
     },
     /// Release everything: Note Off for held notes, OSC keys to 0, clear the key display.
     Panic,
+    /// Custom controls triggered by MIDI. `generation` tags the events they produce.
+    SetMappings(Arc<[Mapping]>, u64),
+    /// MIDI Learn for a custom control; `None` cancels.
+    Learn(Option<usize>),
     Stop,
 }
 
@@ -40,6 +45,8 @@ pub trait Sink {
     fn key(&mut self, half: usize, note: u8, velocity: u8);
     /// Pitch bend 0..=16383 (8192 = centre) and mod wheel 0..=127, for display.
     fn wheels(&mut self, pitch: Option<u16>, modwheel: Option<u8>);
+    /// A custom control was triggered by MIDI (or learned).
+    fn control(&mut self, generation: u64, event: ControlEvent);
 }
 
 pub struct Core {
@@ -49,6 +56,8 @@ pub struct Core {
     osc_on: [bool; 128],
     osc_enabled: bool,
     osc_original: bool,
+    mappings: Mappings,
+    generation: u64,
 }
 
 impl Default for Core {
@@ -60,6 +69,8 @@ impl Default for Core {
             osc_on: [false; 128],
             osc_enabled: false,
             osc_original: true,
+            mappings: Mappings::default(),
+            generation: 0,
         }
     }
 }
@@ -102,6 +113,21 @@ impl Core {
         };
         let kind = status_byte & 0xF0;
         let channel = status_byte & 0x0F;
+        if !self.mappings.is_idle() {
+            let generation = self.generation;
+            let swallow = self
+                .mappings
+                .process(bytes, |event| sink.control(generation, event));
+            if swallow {
+                // A key that is still sounding must always be released, even if
+                // its Note Off is now mapped to a control.
+                let note = bytes.get(1).copied().unwrap_or(0) & 0x7F;
+                let release = kind == 0x80 || (kind == 0x90 && bytes.get(2).copied().unwrap_or(0) == 0);
+                if !(release && self.held.get(channel, note).is_some()) {
+                    return;
+                }
+            }
+        }
         if kind == 0xB0 && bytes.len() >= 3 && bytes[1] == 1 {
             // Mod wheel (CC 1): forwarded unchanged, shown on the wheel.
             sink.midi(bytes);
@@ -165,6 +191,15 @@ impl Core {
                 sink.osc_note(note, false);
             }
         }
+    }
+
+    pub fn set_mappings(&mut self, list: Arc<[Mapping]>, generation: u64) {
+        self.mappings.set(list);
+        self.generation = generation;
+    }
+
+    pub fn learn(&mut self, index: Option<usize>) {
+        self.mappings.learn(index);
     }
 
     pub fn set_osc(&mut self, sink: &mut impl Sink, enabled: bool, original: bool) {
@@ -233,6 +268,10 @@ impl Sink for LiveSink<'_> {
         }
         self.keys_changed = true;
     }
+
+    fn control(&mut self, generation: u64, event: ControlEvent) {
+        let _ = self.cmd_tx.send(EngineCmd::MidiControl { generation, event });
+    }
 }
 
 pub fn spawn(
@@ -265,6 +304,8 @@ pub fn spawn(
                     }
                     FwdMsg::SetOsc { enabled, original } => core.set_osc(&mut sink, enabled, original),
                     FwdMsg::Panic => core.panic(&mut sink),
+                    FwdMsg::SetMappings(list, generation) => core.set_mappings(list, generation),
+                    FwdMsg::Learn(index) => core.learn(index),
                     FwdMsg::Stop => {
                         core.panic(&mut sink);
                         break;
@@ -290,6 +331,7 @@ mod tests {
         vel: [[u8; 128]; 2],
         pitch: u16,
         modw: u8,
+        controls: Vec<ControlEvent>,
     }
 
     impl Default for Rec {
@@ -302,6 +344,7 @@ mod tests {
                 vel: [[0; 128]; 2],
                 pitch: 8192,
                 modw: 0,
+                controls: Vec::new(),
             }
         }
     }
@@ -328,6 +371,65 @@ mod tests {
                 self.modw = m;
             }
         }
+        fn control(&mut self, _generation: u64, event: ControlEvent) {
+            self.controls.push(event);
+        }
+    }
+
+    fn note_mapping(number: u8, forward: bool) -> Arc<[Mapping]> {
+        use crate::project::{MidiTrigger, TriggerKind, TriggerMode, ValueType};
+        vec![Mapping {
+            index: 0,
+            trigger: MidiTrigger {
+                kind: TriggerKind::Note,
+                channel: None,
+                number,
+                mode: TriggerMode::Toggle,
+                forward,
+            },
+            ty: ValueType::Bool,
+            min: 0.0,
+            max: 1.0,
+        }]
+        .into()
+    }
+
+    #[test]
+    fn a_mapped_key_controls_instead_of_playing() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.set_osc(&mut rec, true, true);
+        core.set_mappings(note_mapping(36, false), 1);
+        core.handle(&mut rec, &[0x90, 36, 100], 5);
+        core.handle(&mut rec, &[0x80, 36, 0], 5);
+        assert!(rec.midi.is_empty(), "nothing reaches the output");
+        assert!(rec.osc.is_empty(), "no avatar key either");
+        assert!(!rec.keys[0][36], "not shown on the keyboard");
+        assert_eq!(rec.controls, [ControlEvent::Toggle { index: 0 }]);
+        // Other keys still play.
+        core.handle(&mut rec, &[0x90, 60, 100], 5);
+        assert_eq!(rec.midi, [vec![0x90, 65, 100]]);
+    }
+
+    #[test]
+    fn forwarding_mappings_play_and_control() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.set_mappings(note_mapping(36, true), 1);
+        core.handle(&mut rec, &[0x90, 36, 100], 0);
+        assert_eq!(rec.midi, [vec![0x90, 36, 100]]);
+        assert_eq!(rec.controls, [ControlEvent::Toggle { index: 0 }]);
+    }
+
+    #[test]
+    fn a_held_note_is_released_even_if_its_key_was_mapped_meanwhile() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.handle(&mut rec, &[0x90, 36, 100], 0);
+        core.set_mappings(note_mapping(36, false), 1);
+        core.handle(&mut rec, &[0x80, 36, 0], 0);
+        assert_eq!(
+            rec.midi,
+            [vec![0x90, 36, 100], vec![0x80, 36, 0]],
+            "no stuck note"
+        );
     }
 
     #[test]

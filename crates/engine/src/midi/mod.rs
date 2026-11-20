@@ -2,6 +2,7 @@
 
 pub mod forwarder;
 pub mod held_notes;
+pub mod mapping;
 pub mod ports;
 
 /// Client name shown to the OS. Ports carrying it are our own and are hidden from the pickers.

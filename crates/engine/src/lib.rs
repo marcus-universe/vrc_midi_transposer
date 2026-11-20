@@ -18,6 +18,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+pub use midi::mapping::ControlEvent;
 pub use mqtt::MqttEvent;
 pub use project::{Project, Store};
 pub use state::{EngineEvent, Level, LogLine, Snapshot};
@@ -31,6 +32,8 @@ pub enum Source {
     Console,
     Osc,
     Mqtt,
+    /// A custom control triggered by a MIDI message.
+    Midi,
 }
 
 /// Everything that can be asked of the engine. Processed in order by the supervisor.
@@ -49,6 +52,9 @@ pub enum EngineCmd {
         value: f32,
         source: Source,
     },
+    /// MIDI Learn for custom control `index`: the next Note On, CC or Program
+    /// Change becomes its trigger (reported in `Snapshot::learned`). `None` cancels.
+    MidiLearn(Option<usize>),
     /// Run a console command line.
     Console(String),
     /// Add a line to the log.
@@ -69,6 +75,11 @@ pub enum EngineCmd {
     OutputLost(String),
     #[doc(hidden)]
     Mqtt(u64, MqttEvent),
+    #[doc(hidden)]
+    MidiControl {
+        generation: u64,
+        event: ControlEvent,
+    },
 }
 
 /// Handle to a running engine.

@@ -281,6 +281,7 @@ mod tests {
             default: 0.5,
             min: Some(0.0),
             max: Some(1.0),
+            midi: None,
         }
     }
 

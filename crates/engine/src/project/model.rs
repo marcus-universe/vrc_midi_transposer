@@ -63,7 +63,45 @@ pub enum ValueType {
     Float,
 }
 
-/// A custom control: an OSC address whose value can be set from the UI or MQTT.
+/// Which MIDI message triggers a custom control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerKind {
+    /// Control Change; the value moves a slider, or switches at 64.
+    Cc,
+    /// A key; toggles, or holds the control while pressed.
+    Note,
+    /// Program Change; toggles.
+    Program,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerMode {
+    /// Each Note On flips the control.
+    #[default]
+    Toggle,
+    /// On while the key is held (Note triggers only).
+    Momentary,
+}
+
+/// A MIDI message that sets a custom control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiTrigger {
+    pub kind: TriggerKind,
+    /// 1-16, or any channel when `None`.
+    #[serde(default)]
+    pub channel: Option<u8>,
+    /// CC number, note number or program number, 0-127.
+    pub number: u8,
+    #[serde(default)]
+    pub mode: TriggerMode,
+    /// Also send the message on to the MIDI output. Off: the message only controls.
+    #[serde(default)]
+    pub forward: bool,
+}
+
+/// A custom control: an OSC address whose value can be set from the UI, MQTT or MIDI.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SendAddress {
     pub name: String,
@@ -77,9 +115,20 @@ pub struct SendAddress {
     pub min: Option<f32>,
     #[serde(default)]
     pub max: Option<f32>,
+    /// MIDI message that sets this control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midi: Option<MidiTrigger>,
 }
 
 impl SendAddress {
+    /// Lowest and highest value, with the defaults a slider uses (0 to 1).
+    pub fn range(&self) -> (f32, f32) {
+        match self.ty {
+            ValueType::Bool => (0.0, 1.0),
+            ValueType::Float => (self.min.unwrap_or(0.0), self.max.unwrap_or(1.0)),
+        }
+    }
+
     /// Normalise a value for this control: 0/1 for bool, min/max clamp for float.
     pub fn clamp(&self, value: f32) -> f32 {
         match self.ty {
@@ -252,6 +301,13 @@ impl Project {
                     item.max = Some(min);
                 }
             }
+            if let Some(trigger) = &mut item.midi {
+                trigger.number &= 0x7F;
+                trigger.channel = trigger.channel.filter(|c| (1..=16).contains(c));
+                if trigger.kind != TriggerKind::Note {
+                    trigger.mode = TriggerMode::Toggle;
+                }
+            }
         }
         self.mqtt.base_topic = self.mqtt.base_topic.trim().trim_matches('/').to_string();
         if self.mqtt.base_topic.is_empty() {
@@ -315,6 +371,13 @@ mod tests {
             default: 0.25,
             min: Some(0.0),
             max: Some(1.0),
+            midi: Some(MidiTrigger {
+                kind: TriggerKind::Cc,
+                channel: Some(2),
+                number: 20,
+                mode: TriggerMode::Toggle,
+                forward: false,
+            }),
         });
         p.midi.input = Some(PortRef {
             id: "x".into(),
@@ -347,6 +410,7 @@ mod tests {
             default: 2.0,
             min: Some(0.0),
             max: Some(1.0),
+            midi: None,
         };
         assert_eq!(f.initial(), 1.0);
         assert_eq!(f.clamp(-3.0), 0.0);
@@ -360,5 +424,25 @@ mod tests {
         };
         assert_eq!(b.clamp(7.0), 1.0);
         assert_eq!(b.clamp(0.0), 0.0);
+    }
+
+    #[test]
+    fn triggers_are_optional_and_normalised() {
+        let p: Project = serde_json::from_str(
+            r#"{"osc":{"sending_addresses":[
+                {"name":"A","addr":"/a","type":"bool"},
+                {"name":"B","addr":"/b","type":"float","midi":{"kind":"cc","channel":0,"number":200,"mode":"momentary"}}
+            ]}}"#,
+        )
+        .unwrap();
+        let p = p.normalized();
+        assert_eq!(p.osc.sending_addresses[0].midi, None);
+        let t = p.osc.sending_addresses[1].midi.unwrap();
+        assert_eq!(
+            (t.kind, t.channel, t.number, t.mode, t.forward),
+            (TriggerKind::Cc, None, 72, TriggerMode::Toggle, false)
+        );
+        let text = serde_json::to_string(&p.osc.sending_addresses[0]).unwrap();
+        assert!(!text.contains("midi"), "no trigger, no field: {text}");
     }
 }

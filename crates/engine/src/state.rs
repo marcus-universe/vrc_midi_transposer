@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::project::Project;
+use crate::project::{MidiTrigger, Project};
 
 /// Pitch bend value of a centred wheel.
 pub const PITCH_CENTRE: u16 = 8192;
@@ -134,6 +134,14 @@ pub struct MqttStatus {
     pub last_command_ts: u64,
 }
 
+/// Result of MIDI Learn. `seq` grows with every result, so a front end can tell a new one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Learned {
+    pub seq: u64,
+    pub index: usize,
+    pub trigger: MidiTrigger,
+}
+
 /// Everything a front end needs to draw the current state. Sent whole, never as a delta.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Snapshot {
@@ -152,6 +160,10 @@ pub struct Snapshot {
     pub osc_listener: ListenerStatus,
     pub osc_target: String,
     pub mqtt: MqttStatus,
+    /// Custom control waiting for MIDI Learn, if any.
+    pub learning: Option<usize>,
+    /// Last MIDI Learn result.
+    pub learned: Option<Learned>,
 }
 
 /// Notifications for the front end. Wake-up tokens: the data is read from [`Shared`].

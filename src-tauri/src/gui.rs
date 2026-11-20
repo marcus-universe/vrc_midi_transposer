@@ -92,14 +92,31 @@ pub struct Init {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiCmd {
-    SetTranspose { value: i32 },
-    Nudge { delta: i32 },
-    SetOscSending { on: bool },
-    SetSendOriginal { on: bool },
-    SetDebug { on: bool },
-    CustomOsc { index: usize, value: f32 },
+    SetTranspose {
+        value: i32,
+    },
+    Nudge {
+        delta: i32,
+    },
+    SetOscSending {
+        on: bool,
+    },
+    SetSendOriginal {
+        on: bool,
+    },
+    SetDebug {
+        on: bool,
+    },
+    CustomOsc {
+        index: usize,
+        value: f32,
+    },
     RefreshPorts,
     Panic,
+    /// MIDI Learn for a custom control; `index: null` cancels.
+    MidiLearn {
+        index: Option<usize>,
+    },
 }
 
 /// The project being edited and its last saved version.
@@ -372,6 +389,7 @@ fn engine_cmd(state: State<AppState>, cmd: UiCmd) {
         },
         UiCmd::RefreshPorts => EngineCmd::RefreshPorts,
         UiCmd::Panic => EngineCmd::Panic,
+        UiCmd::MidiLearn { index } => EngineCmd::MidiLearn(index),
     });
 }
 
