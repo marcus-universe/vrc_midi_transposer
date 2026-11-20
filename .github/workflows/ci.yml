@@ -190,7 +190,10 @@ jobs:
       dry_run: true
 
   package-test:
-    name: Install ${{ matrix.format }} on ${{ matrix.image }} (${{ matrix.arch }})
+    # A static name: GitHub shows the raw expression for a skipped matrix job
+    # (every push that is not a pull request to main). The matrix values are
+    # appended automatically, in the order of the keys below.
+    name: Install package
     needs: release-dry-run
     runs-on: ${{ matrix.runner }}
     container:
@@ -200,41 +203,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
-            runner: ubuntu-24.04
+          - format: deb
             image: ubuntu:24.04
-            format: deb
-          - arch: x86_64
+            arch: x86_64
             runner: ubuntu-24.04
+          - format: deb
             image: debian:12
-            format: deb
-          - arch: x86_64
+            arch: x86_64
             runner: ubuntu-24.04
+          - format: rpm
             image: fedora:latest
-            format: rpm
-          - arch: x86_64
+            arch: x86_64
             runner: ubuntu-24.04
+          - format: AppImage
             image: archlinux:latest
-            format: AppImage
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
+            arch: x86_64
+            runner: ubuntu-24.04
+          - format: deb
             image: ubuntu:24.04
-            format: deb
-          - arch: aarch64
+            arch: aarch64
             runner: ubuntu-24.04-arm
+          - format: deb
             image: debian:12
-            format: deb
-          - arch: aarch64
+            arch: aarch64
             runner: ubuntu-24.04-arm
+          - format: rpm
             image: fedora:latest
-            format: rpm
+            arch: aarch64
+            runner: ubuntu-24.04-arm
           # Arch Linux has no official arm64 image, so the aarch64 AppImage
           # cannot be tested there. Ubuntu stands in so that it is started at
           # least once.
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
+          - format: AppImage
             image: ubuntu:24.04
-            format: AppImage
+            arch: aarch64
+            runner: ubuntu-24.04-arm
     defaults:
       run:
         shell: bash
