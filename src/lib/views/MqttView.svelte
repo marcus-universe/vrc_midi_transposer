@@ -2,6 +2,7 @@
   import { app } from '../app.svelte';
   import { relativeTime, slug } from '../format';
   import { anyText, host, mqttTopic, port } from '../parsers';
+  import type { LastCommand } from '../ipc';
   import Field from '../components/Field.svelte';
   import Icon from '../components/Icon.svelte';
   import Switch from '../components/Switch.svelte';
@@ -53,6 +54,25 @@
         ? 'Turned on for this session from the console. The project still has MQTT off.'
         : 'Turned off for this session from the console. The project still has MQTT on.',
   );
+
+  function describeCommand(c: LastCommand): string {
+    switch (c.kind) {
+      case 'transpose':
+        return `Transpose = ${c.value}`;
+      case 'transpose_up':
+        return 'Transpose up';
+      case 'transpose_down':
+        return 'Transpose down';
+      case 'osc_sending':
+        return `OSC sending ${c.on ? 'on' : 'off'}`;
+      case 'send_original':
+        return c.on ? 'Send original notes' : 'Send transposed notes';
+      case 'debug':
+        return `Debug ${c.on ? 'on' : 'off'}`;
+      case 'custom':
+        return `${c.name} = ${c.value}`;
+    }
+  }
 
   // --- Topic reference -----------------------------------------------------
   let showTopics = $state(false);
@@ -221,7 +241,7 @@
         <dt>Last command</dt>
         <dd>
           {#if s.mqtt.last_command}
-            <span class="line mono selectable">{s.mqtt.last_command}</span>
+            <span class="line mono selectable">{describeCommand(s.mqtt.last_command)}</span>
             <span class="detail num">{relativeTime(s.mqtt.last_command_ts, app.now)}</span>
           {:else}
             <span class="line">None received yet</span>

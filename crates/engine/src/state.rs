@@ -100,12 +100,37 @@ pub enum MqttConnState {
     Error,
 }
 
+/// What the last command received over MQTT did. The UI words it in the user's language.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LastCommand {
+    Transpose {
+        value: i32,
+    },
+    TransposeUp,
+    TransposeDown,
+    OscSending {
+        on: bool,
+    },
+    SendOriginal {
+        on: bool,
+    },
+    Debug {
+        on: bool,
+    },
+    /// A custom control; `value` is the state payload (`1`/`0` or a number).
+    Custom {
+        name: String,
+        value: String,
+    },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct MqttStatus {
     pub state: MqttConnState,
     pub detail: String,
     pub entities: usize,
-    pub last_command: String,
+    pub last_command: Option<LastCommand>,
     pub last_command_ts: u64,
 }
 

@@ -530,7 +530,7 @@ impl Supervisor {
             }
             MqttEvent::Command(text) => {
                 self.shared.update(|s| {
-                    s.mqtt.last_command = text;
+                    s.mqtt.last_command = Some(text);
                     s.mqtt.last_command_ts = now_ms();
                 });
             }

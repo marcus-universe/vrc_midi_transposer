@@ -9,21 +9,7 @@
 //   ?demo=0                   do not play the piano demo
 
 import { clamp, defaultListenAddresses, slug } from './format';
-import type {
-  AppInfo,
-  EngineCmd,
-  Frame,
-  Init,
-  LogLevel,
-  LogLine,
-  MidiStatus,
-  PortInfo,
-  PortRef,
-  Project,
-  ProjectInfo,
-  ProjectState,
-  Snapshot,
-} from './ipc';
+import type { AppInfo, EngineCmd, Frame, Init, LogLevel, LogLine, MidiStatus, PortInfo, PortRef, Project, ProjectInfo, ProjectState, Snapshot, LastCommand } from './ipc';
 
 const BANNER = String.raw` _  _  ____   ___
 ╱ )( ╲(  _ ╲ ╱ __)     ▓▓╦▓▓▓╦▓▓▓╦▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
@@ -131,7 +117,7 @@ const session = {
   mqtt_enabled: false,
   mqtt_connected: false,
   custom_values: [] as number[],
-  last_command: '',
+  last_command: null as LastCommand | null,
   last_command_ts: 0,
 };
 
@@ -160,7 +146,7 @@ function seed() {
   applyOpenValues();
   session.transpose = 3;
   session.mqtt_connected = true;
-  session.last_command = 'transpose = 3';
+  session.last_command = { kind: 'transpose', value: 3 };
   session.last_command_ts = now - 42_000;
 
   log('accent', `${APP.name} ${APP.version}`);

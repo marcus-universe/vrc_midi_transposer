@@ -36,6 +36,16 @@ export interface MidiStatus {
   detail: string;
 }
 
+export type LastCommand =
+  | { kind: 'transpose'; value: number }
+  | { kind: 'transpose_up' }
+  | { kind: 'transpose_down' }
+  | { kind: 'osc_sending'; on: boolean }
+  | { kind: 'send_original'; on: boolean }
+  | { kind: 'debug'; on: boolean }
+  /** A custom control; `value` is the state payload (`1`/`0` or a number). */
+  | { kind: 'custom'; name: string; value: string };
+
 export type ServiceState = 'stopped' | 'running' | 'error';
 export type MqttConnState = 'disabled' | 'connecting' | 'connected' | 'error';
 
@@ -62,8 +72,8 @@ export interface Snapshot {
     detail: string;
     /** Number of Home Assistant discovery entities published. */
     entities: number;
-    /** Human-readable last command received over MQTT, empty if none. */
-    last_command: string;
+    /** What the last command received over MQTT did; null if none. */
+    last_command: LastCommand | null;
     /** Milliseconds since the Unix epoch, 0 if none. */
     last_command_ts: number;
   };

@@ -15,7 +15,7 @@ use rumqttc::{Client, Connection, Event, LastWill, MqttOptions, Outgoing, Packet
 
 use super::topics::{self, Topics};
 use crate::project::Project;
-use crate::state::{MqttConnState, Shared};
+use crate::state::{LastCommand, MqttConnState, Shared};
 use crate::{EngineCmd, Source};
 
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -31,7 +31,7 @@ pub enum MqttEvent {
     /// Connected and set up; the number of discovery entities published.
     Ready(usize),
     /// A command arrived; text for the "last command" display.
-    Command(String),
+    Command(LastCommand),
 }
 
 pub struct MqttHandle {
@@ -275,7 +275,7 @@ impl Worker {
             match topics::parse_transpose(payload) {
                 Some(v) => Some((
                     EngineCmd::SetTranspose(v, Source::Mqtt),
-                    format!("Transpose = {v}"),
+                    LastCommand::Transpose { value: v },
                 )),
                 None => {
                     self.shared
@@ -285,28 +285,25 @@ impl Worker {
             }
         } else if topic == t.transpose_up {
             topics::parse_bool(payload)
-                .then(|| (EngineCmd::Nudge(1, Source::Mqtt), "Transpose up".to_string()))
+                .then_some((EngineCmd::Nudge(1, Source::Mqtt), LastCommand::TransposeUp))
         } else if topic == t.transpose_down {
             topics::parse_bool(payload)
-                .then(|| (EngineCmd::Nudge(-1, Source::Mqtt), "Transpose down".to_string()))
+                .then_some((EngineCmd::Nudge(-1, Source::Mqtt), LastCommand::TransposeDown))
         } else if topic == t.osc_sending_set {
             let on = topics::parse_bool(payload);
             Some((
                 EngineCmd::SetOscSending(on, Source::Mqtt),
-                format!("OSC sending {}", on_off(on)),
+                LastCommand::OscSending { on },
             ))
         } else if topic == t.send_original_set {
             let on = topics::parse_bool(payload);
             Some((
                 EngineCmd::SetSendOriginal(on, Source::Mqtt),
-                format!("OSC send original {}", on_off(on)),
+                LastCommand::SendOriginal { on },
             ))
         } else if topic == t.debug_set {
             let on = topics::parse_bool(payload);
-            Some((
-                EngineCmd::SetDebug(on, Source::Mqtt),
-                format!("Debug {}", on_off(on)),
-            ))
+            Some((EngineCmd::SetDebug(on, Source::Mqtt), LastCommand::Debug { on }))
         } else if let Some(index) = t.custom_set.iter().position(|s| s == topic) {
             let control = &self.project.osc.sending_addresses[index];
             let value = topics::parse_custom(control, payload);
@@ -316,7 +313,10 @@ impl Worker {
                     value,
                     source: Source::Mqtt,
                 },
-                format!("{} = {}", control.name, topics::custom_payload(control, value)),
+                LastCommand::Custom {
+                    name: control.name.clone(),
+                    value: topics::custom_payload(control, value),
+                },
             ))
         } else {
             None
@@ -357,13 +357,5 @@ impl Worker {
                 _ => {}
             }
         }
-    }
-}
-
-fn on_off(on: bool) -> &'static str {
-    if on {
-        "on"
-    } else {
-        "off"
     }
 }

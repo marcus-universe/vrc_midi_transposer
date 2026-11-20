@@ -56,7 +56,7 @@ const EMPTY_SNAPSHOT: Snapshot = {
   midi_out: { state: 'none', id: '', name: '', detail: '' },
   osc_listener: { state: 'stopped', detail: '', bound: '' },
   osc_target: '',
-  mqtt: { state: 'disabled', detail: '', entities: 0, last_command: '', last_command_ts: 0 },
+  mqtt: { state: 'disabled', detail: '', entities: 0, last_command: null, last_command_ts: 0 },
 };
 
 const EMPTY_PROJECT: Project = {
