@@ -38,7 +38,6 @@ export interface MidiStatus {
 
 export type ServiceState = 'stopped' | 'running' | 'error';
 export type MqttConnState = 'disabled' | 'connecting' | 'connected' | 'error';
-export type HomeAssistantState = 'unknown' | 'online' | 'offline';
 
 export interface Snapshot {
   transpose: number;
@@ -63,7 +62,6 @@ export interface Snapshot {
     detail: string;
     /** Number of Home Assistant discovery entities published. */
     entities: number;
-    ha: HomeAssistantState;
     /** Human-readable last command received over MQTT, empty if none. */
     last_command: string;
     /** Milliseconds since the Unix epoch, 0 if none. */

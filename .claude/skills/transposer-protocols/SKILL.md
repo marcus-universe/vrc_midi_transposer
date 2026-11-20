@@ -67,7 +67,7 @@ Client id `vrc_midi_transposer`. Plain TCP. `<b>` is the project's base topic (d
 - Transpose payload: integer, or a float that is rounded.
 - Boolean payload: `1`, `true` or `on` (any case) is true; anything else is false. For up/down a false payload is ignored.
 - Booleans are published as `1` / `0`, numbers as plain text.
-- Also subscribed: `homeassistant/+/midi_transposer/#` (stale entity cleanup) and `homeassistant/status` (Home Assistant online/offline).
+- Also subscribed: `homeassistant/+/midi_transposer/#` (stale entity cleanup).
 
 ### Home Assistant discovery
 

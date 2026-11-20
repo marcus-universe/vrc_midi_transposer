@@ -86,13 +86,6 @@
     }
   });
 
-  const ha = $derived.by(() => {
-    if (s.mqtt.state !== 'connected') return { tone: '', text: 'Needs MQTT' };
-    if (s.mqtt.ha === 'online') return { tone: 'ok', text: 'Online' };
-    if (s.mqtt.ha === 'offline') return { tone: 'warn', text: 'Offline' };
-    return { tone: '', text: 'Not seen yet' };
-  });
-
   // --- Custom controls -----------------------------------------------------
   const controls = $derived(p.osc.sending_addresses);
 </script>
@@ -234,8 +227,6 @@
       <dd><span class={['dot', listener.tone]}></span><span>{listener.text}</span></dd>
       <dt>MQTT</dt>
       <dd><span class={['dot', mqtt.tone]}></span><span>{mqtt.text}</span></dd>
-      <dt>Home Assistant</dt>
-      <dd><span class={['dot', ha.tone]}></span><span>{ha.text}</span></dd>
     </dl>
   </section>
 

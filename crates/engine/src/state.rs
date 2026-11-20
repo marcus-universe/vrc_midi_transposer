@@ -97,21 +97,11 @@ pub enum MqttConnState {
     Error,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HaState {
-    #[default]
-    Unknown,
-    Online,
-    Offline,
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct MqttStatus {
     pub state: MqttConnState,
     pub detail: String,
     pub entities: usize,
-    pub ha: HaState,
     pub last_command: String,
     pub last_command_ts: u64,
 }

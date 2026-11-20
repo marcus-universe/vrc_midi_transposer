@@ -22,8 +22,7 @@ use crate::osc::listener::{build_routes, ListenerHandle, Routes};
 use crate::osc::out::OscOut;
 use crate::project::{Project, ValueType};
 use crate::state::{
-    now_ms, EngineEvent, HaState, Level, MidiConnState, MidiStatus, MqttConnState, PortInfo, ServiceState,
-    Shared,
+    now_ms, EngineEvent, Level, MidiConnState, MidiStatus, MqttConnState, PortInfo, ServiceState, Shared,
 };
 use crate::{EngineCmd, Source};
 
@@ -504,7 +503,6 @@ impl Supervisor {
             };
             s.mqtt.detail.clear();
             s.mqtt.entities = 0;
-            s.mqtt.ha = HaState::Unknown;
         });
     }
 
@@ -529,11 +527,6 @@ impl Supervisor {
                     s.mqtt.detail.clear();
                     s.mqtt.entities = entities;
                 });
-            }
-            MqttEvent::HomeAssistant(ha) => {
-                self.shared
-                    .debug_log(|| format!("[MQTT] Home Assistant is {ha:?}"));
-                self.shared.update(|s| s.mqtt.ha = ha);
             }
             MqttEvent::Command(text) => {
                 self.shared.update(|s| {

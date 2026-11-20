@@ -15,7 +15,7 @@ use rumqttc::{Client, Connection, Event, LastWill, MqttOptions, Outgoing, Packet
 
 use super::topics::{self, Topics};
 use crate::project::Project;
-use crate::state::{HaState, MqttConnState, Shared};
+use crate::state::{MqttConnState, Shared};
 use crate::{EngineCmd, Source};
 
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
@@ -30,7 +30,6 @@ pub enum MqttEvent {
     Status(MqttConnState, String),
     /// Connected and set up; the number of discovery entities published.
     Ready(usize),
-    HomeAssistant(HaState),
     /// A command arrived; text for the "last command" display.
     Command(String),
 }
@@ -319,14 +318,6 @@ impl Worker {
                 },
                 format!("{} = {}", control.name, topics::custom_payload(control, value)),
             ))
-        } else if topic == topics::HA_STATUS {
-            let state = match text().to_ascii_lowercase().as_str() {
-                "online" => HaState::Online,
-                "offline" => HaState::Offline,
-                _ => HaState::Unknown,
-            };
-            self.report(MqttEvent::HomeAssistant(state));
-            None
         } else {
             None
         };

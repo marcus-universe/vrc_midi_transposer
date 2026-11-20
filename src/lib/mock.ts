@@ -283,7 +283,6 @@ function snapshot(): Snapshot {
       state: mqttState,
       detail: mqttState === 'error' ? `Could not reach ${m.broker_host || 'the broker'}:${m.broker_port}. Connection refused.` : '',
       entities: mqttState === 'connected' ? 6 + working.osc.sending_addresses.length : 0,
-      ha: mqttState === 'connected' ? 'online' : 'unknown',
       last_command: session.last_command,
       last_command_ts: session.last_command_ts,
     },

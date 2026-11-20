@@ -46,7 +46,7 @@ Open the **MQTT** view in the app and fill in:
 - **User name / Password**: the credentials you created earlier
 - **Base topic**: the prefix for all MQTT messages, `midi_transposer` by default
 
-Switch **MQTT** on. The status block shows *Connected* when the broker accepted the connection, and the Home Assistant line changes to *online* once Home Assistant has announced itself. Press **Save** (Ctrl+S) to keep the settings in your project.
+Switch **MQTT** on. The status block shows *Connected* when the broker accepted the connection. Press **Save** (Ctrl+S) to keep the settings in your project.
 
 If you used version 1, import your old `config.json` from the project menu instead; the MQTT settings are taken over.
 

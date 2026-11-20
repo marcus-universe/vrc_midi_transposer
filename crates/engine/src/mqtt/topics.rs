@@ -9,7 +9,6 @@ use crate::project::{Project, SendAddress, ValueType};
 pub const CLIENT_ID: &str = "vrc_midi_transposer";
 /// Home Assistant node id; independent of the base topic.
 pub const NODE_ID: &str = "midi_transposer";
-pub const HA_STATUS: &str = "homeassistant/status";
 pub const HA_OWN_DISCOVERY: &str = "homeassistant/+/midi_transposer/#";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +66,6 @@ impl Topics {
         ];
         out.extend(self.custom_set.iter().map(String::as_str));
         out.push(HA_OWN_DISCOVERY);
-        out.push(HA_STATUS);
         out
     }
 }
@@ -315,7 +313,7 @@ mod tests {
             "midi_transposer/osc/custom/sunglasses_toggle/set"
         );
         assert_eq!(t.custom_state[1], "midi_transposer/state/osc/custom/hue_shift");
-        assert_eq!(t.subscriptions().len(), 6 + 2 + 2);
+        assert_eq!(t.subscriptions().len(), 6 + 2 + 1);
     }
 
     #[test]

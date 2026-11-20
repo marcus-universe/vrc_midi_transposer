@@ -54,12 +54,6 @@
         : 'Turned off for this session from the console. The project still has MQTT on.',
   );
 
-  const ha = $derived.by(() => {
-    if (s.mqtt.ha === 'online') return { tone: 'ok', text: 'Online' };
-    if (s.mqtt.ha === 'offline') return { tone: 'warn', text: 'Offline' };
-    return { tone: '', text: 'Not seen yet' };
-  });
-
   // --- Topic reference -----------------------------------------------------
   let showTopics = $state(false);
 
@@ -222,12 +216,6 @@
             {s.mqtt.entities}
             {s.mqtt.entities === 1 ? 'entity' : 'entities'} published
           </span>
-        </dd>
-
-        <dt>Home Assistant</dt>
-        <dd>
-          <span class="line"><span class={['dot', ha.tone]}></span><span>{ha.text}</span></span>
-          <span class="detail">Reported by Home Assistant itself on its status topic, homeassistant/status.</span>
         </dd>
 
         <dt>Last command</dt>
