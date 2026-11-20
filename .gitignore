@@ -17,3 +17,7 @@ package-lock.json
 # Editors
 .vscode/
 .claude/settings.local.json
+
+# Signing keys (the updater private key lives in ~/.tauri, never here)
+*.key
+*.key.pub.bak
