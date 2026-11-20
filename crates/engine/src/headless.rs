@@ -16,9 +16,9 @@ use crate::{info, Engine, EngineCmd};
 pub struct Options {
     /// Data directory; the per-user default when `None`.
     pub data_dir: Option<PathBuf>,
-    /// Project to open, by name or id; the last used one when `None`.
+    /// Project to open: a `.vrcmt` path, or the name of a recent project. The last one when `None`.
     pub project: Option<String>,
-    /// A v1 `config.json` or exported project to import and open.
+    /// A v1 `config.json` or project file to open without remembering it.
     pub import: Option<PathBuf>,
 }
 
@@ -81,31 +81,46 @@ pub fn run(options: Options) -> i32 {
     }
 }
 
+/// Where new and converted projects go. With a custom data directory (tests,
+/// portable use) they stay inside it instead of the user's Documents folder.
+pub fn documents_dir(custom_data_dir: bool, store: &Store) -> PathBuf {
+    if custom_data_dir {
+        store.dir().join("Projects")
+    } else {
+        Store::default_documents_dir()
+    }
+}
+
 fn run_engine(options: Options, out: &mut StandardStream) -> Result<(), String> {
+    let custom_dir = options.data_dir.is_some();
     let store = Store::open(options.data_dir.unwrap_or_else(Store::default_dir))?;
     let _instance = store.lock_instance()?;
+    let documents = documents_dir(custom_dir, &store);
 
-    let (project, note) = if let Some(path) = &options.import {
-        let mut project = Store::read_import(path)?;
-        store.save(&mut project)?;
-        let note = format!("Imported {} as project '{}'", path.display(), project.name);
-        (project, Some(note))
+    let mut notes = Vec::new();
+    let project = if let Some(path) = &options.import {
+        let project = store.read_file(path)?;
+        notes.push(format!(
+            "Imported {} as project '{}'",
+            path.display(),
+            project.name
+        ));
+        project
     } else if let Some(name) = &options.project {
-        let project = store.find(name).ok_or_else(|| {
-            let known: Vec<String> = store.list().into_iter().map(|p| p.name).collect();
-            format!("No project named '{name}'. Available: {}", known.join(", "))
-        })?;
-        (project, None)
+        let (project, path) = store.find(name)?;
+        store.remember(&path);
+        project
     } else {
-        store.startup_project(&legacy_config_dirs())?
+        let start = store.startup(None, &documents, &legacy_config_dirs());
+        notes.extend(start.notes);
+        start.project
     };
-    store.remember_last(&project.id);
     let project_name = project.name.clone();
 
     let (engine, events) = Engine::start(project);
     let engine = Arc::new(engine);
     engine.send(EngineCmd::Log(Level::Info, format!("Project: {project_name}")));
-    if let Some(note) = note {
+    for note in notes {
         engine.send(EngineCmd::Log(Level::Info, note));
     }
 

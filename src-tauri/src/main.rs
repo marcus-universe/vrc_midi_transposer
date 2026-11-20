@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use transposer_engine::{headless, info};
 
 const USAGE: &str = "\
-Usage: vrc-midi-transposer [OPTIONS]
+Usage: vrc-midi-transposer [OPTIONS] [FILE.vrcmt]
 
-Without options the graphical app starts.
+Without options the graphical app starts with the last project, or with FILE.
 
 Options:
   --headless           Run in the terminal without a window
-  --project <NAME>     Open this project (name or id) instead of the last one
-  --import <FILE>      Import a v1 config.json or an exported project and open it
+  --project <NAME>     Open this project file, or a recent project by name
+  --import <FILE>      Open a v1 config.json or a project file without remembering it
   --data-dir <DIR>     Use this data directory instead of the per-user default
   --version, -V        Print version, owner, license and repository
   --help, -h           Print this help";
@@ -30,6 +30,8 @@ struct Args {
     project: Option<String>,
     import: Option<PathBuf>,
     data_dir: Option<PathBuf>,
+    /// A project file to open (double-click, "Open with").
+    file: Option<PathBuf>,
 }
 
 fn parse_args(mut argv: impl Iterator<Item = String>) -> Result<Args, String> {
@@ -44,7 +46,12 @@ fn parse_args(mut argv: impl Iterator<Item = String>) -> Result<Args, String> {
             "--import" => args.import = Some(PathBuf::from(value("--import")?)),
             "--data-dir" => args.data_dir = Some(PathBuf::from(value("--data-dir")?)),
             // Arguments added by the OS or the bundle launcher (e.g. macOS -psn_…) are ignored.
-            other if !other.starts_with("--") => {}
+            other if other.starts_with('-') && !other.starts_with("--") => {}
+            other if !other.starts_with("--") => {
+                if args.file.is_none() {
+                    args.file = Some(PathBuf::from(other));
+                }
+            }
             other => return Err(format!("Unknown option {other}")),
         }
     }
@@ -78,7 +85,9 @@ fn main() {
         console::ensure_interactive();
         let code = headless::run(headless::Options {
             data_dir: args.data_dir,
-            project: args.project,
+            project: args
+                .project
+                .or_else(|| args.file.map(|f| f.display().to_string())),
             import: args.import,
         });
         std::process::exit(code);
@@ -88,6 +97,7 @@ fn main() {
         data_dir: args.data_dir,
         project: args.project,
         import: args.import,
+        file: args.file,
     });
 }
 
@@ -123,6 +133,13 @@ mod tests {
     fn rejects_unknown_options_and_missing_values() {
         assert!(parse(&["--nope"]).is_err());
         assert!(parse(&["--project"]).is_err());
-        assert!(parse(&["stray"]).is_ok());
+        assert!(parse(&["-psn_0_123"]).unwrap().file.is_none());
+    }
+
+    #[test]
+    fn a_file_argument_is_opened() {
+        let args = parse(&["C:\\Music\\Live set.vrcmt"]).unwrap();
+        assert_eq!(args.file, Some(PathBuf::from("C:\\Music\\Live set.vrcmt")));
+        assert!(!args.headless);
     }
 }

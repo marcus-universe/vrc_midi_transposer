@@ -3,7 +3,7 @@
 //! The typed counterpart of this file is `src/lib/ipc.ts`; keep them in sync.
 
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, MutexGuard};
@@ -17,8 +17,8 @@ use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_window_state::StateFlags;
 
-use transposer_engine::headless::legacy_config_dirs;
-use transposer_engine::project::{Project, ProjectInfo, Store};
+use transposer_engine::headless::{documents_dir, legacy_config_dirs};
+use transposer_engine::project::{file_name_for, Project, RecentFile, Store, EXTENSION};
 use transposer_engine::{info, Engine, EngineCmd, EngineEvent, Level, LogLine, Snapshot, Source};
 
 /// Events are collected for this long before one frame is sent to the webview.
@@ -30,7 +30,15 @@ pub struct Options {
     pub data_dir: Option<PathBuf>,
     pub project: Option<String>,
     pub import: Option<PathBuf>,
+    /// A project file given on the command line (double-click on a `.vrcmt`).
+    pub file: Option<PathBuf>,
 }
+
+/// A file the system asked us to open (second launch, macOS "open with")
+/// that the UI has not taken yet. Managed before setup: on macOS the request
+/// can arrive before the engine exists.
+#[derive(Default)]
+pub struct PendingOpen(Mutex<Option<PathBuf>>);
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -55,13 +63,18 @@ pub struct Frame {
     cleared: bool,
     #[serde(skip_serializing_if = "is_false")]
     close_requested: bool,
+    /// A file is waiting to be opened: ask about unsaved changes, then call `take_pending_open`.
+    #[serde(skip_serializing_if = "is_false")]
+    open_pending: bool,
 }
 
 #[derive(Serialize)]
 pub struct ProjectState {
     project: Value,
     dirty: bool,
-    projects: Vec<ProjectInfo>,
+    /// The project file, or `None` for a project that was never saved.
+    path: Option<String>,
+    recent: Vec<RecentFile>,
 }
 
 #[derive(Serialize)]
@@ -73,6 +86,8 @@ struct AppInfo {
     license: &'static str,
     repository: &'static str,
     data_dir: String,
+    /// Where Save As starts for a project that has no file yet.
+    documents_dir: String,
 }
 
 #[derive(Serialize)]
@@ -119,16 +134,28 @@ pub enum UiCmd {
     },
 }
 
-/// The project being edited and its last saved version.
+/// The project being edited, its last saved version and its file.
 struct Work {
     working: Project,
     saved: Project,
+    path: Option<PathBuf>,
+}
+
+impl Work {
+    /// Unsaved changes. A project without a file counts as changed unless it
+    /// is still the empty default (an imported config.json must be saved).
+    fn dirty(&self) -> bool {
+        self.working != self.saved
+            || (self.path.is_none() && self.working != Project::named("Untitled").normalized())
+    }
 }
 
 pub struct AppState {
     engine: Engine,
     store: Store,
-    _instance: File,
+    documents: PathBuf,
+    /// Released on exit before a restart, so the new process can take it.
+    instance: Mutex<Option<File>>,
     work: Mutex<Work>,
     channel: Mutex<Option<Channel<Frame>>>,
     visible: AtomicBool,
@@ -171,39 +198,54 @@ fn from_ui(value: Value, current: &Project) -> Result<Project, String> {
 
 impl AppState {
     fn init(options: &Options) -> Result<(AppState, Receiver<EngineEvent>), String> {
+        let custom_dir = options.data_dir.is_some();
         let store = Store::open(options.data_dir.clone().unwrap_or_else(Store::default_dir))?;
         let instance = store.lock_instance()?;
+        let documents = documents_dir(custom_dir, &store);
 
-        let (project, note) = if let Some(path) = &options.import {
-            let mut project = Store::read_import(path)?;
-            store.save(&mut project)?;
-            let note = format!("Imported {} as project '{}'", path.display(), project.name);
-            (project, Some(note))
+        let mut notes = Vec::new();
+        let (project, path) = if let Some(path) = &options.import {
+            let project = store.read_file(path)?;
+            notes.push(format!(
+                "Imported {} as project '{}'",
+                path.display(),
+                project.name
+            ));
+            (project, None)
         } else if let Some(name) = &options.project {
-            (
-                store
-                    .find(name)
-                    .ok_or_else(|| format!("No project named '{name}'."))?,
-                None,
-            )
+            let (project, path) = store.find(name)?;
+            store.remember(&path);
+            (project, Some(path))
         } else {
-            store.startup_project(&legacy_config_dirs())?
+            let start = store.startup(options.file.as_deref(), &documents, &legacy_config_dirs());
+            notes.extend(start.notes);
+            (start.project, start.path)
         };
-        store.remember_last(&project.id);
+        if path.is_none() {
+            store.forget_last();
+        }
 
         let (engine, events) = Engine::start(project.clone());
         engine.send(EngineCmd::Log(Level::Info, format!("Project: {}", project.name)));
-        if let Some(note) = note {
+        for note in notes {
             engine.send(EngineCmd::Log(Level::Info, note));
         }
 
+        // A file that was not imported starts clean; an import starts as unsaved.
+        let saved = if path.is_some() {
+            project.clone()
+        } else {
+            Project::named("Untitled").normalized()
+        };
         let state = AppState {
             engine,
             store,
-            _instance: instance,
+            documents,
+            instance: Mutex::new(Some(instance)),
             work: Mutex::new(Work {
-                working: project.clone(),
-                saved: project,
+                working: project,
+                saved,
+                path,
             }),
             channel: Mutex::new(None),
             visible: AtomicBool::new(true),
@@ -216,14 +258,14 @@ impl AppState {
     fn project_state(&self, work: &Work) -> ProjectState {
         ProjectState {
             project: to_ui(&work.working),
-            dirty: work.working != work.saved,
-            projects: self.store.list(),
+            dirty: work.dirty(),
+            path: work.path.as_ref().map(|p| p.display().to_string()),
+            recent: self.store.recent(),
         }
     }
 
     fn is_dirty(&self) -> bool {
-        let work = lock(&self.work);
-        work.working != work.saved
+        lock(&self.work).dirty()
     }
 
     fn send(&self, frame: Frame) {
@@ -253,18 +295,81 @@ impl AppState {
             wheels: Some(wheels),
             cleared: true,
             close_requested: false,
+            open_pending: false,
         }
     }
 
-    /// Make a project the open one and run it.
-    fn open(&self, work: &mut Work, project: Project) {
-        self.store.remember_last(&project.id);
+    /// Make a project the open one and run it. `path: None` for an import or a new project.
+    fn open(&self, work: &mut Work, project: Project, path: Option<PathBuf>) {
+        match &path {
+            Some(p) => self.store.remember(p),
+            None => self.store.forget_last(),
+        }
         self.engine
             .send(EngineCmd::Log(Level::Info, format!("Project: {}", project.name)));
         self.engine
             .send(EngineCmd::LoadProject(Box::new(project.clone())));
-        work.working = project.clone();
-        work.saved = project;
+        work.saved = if path.is_some() {
+            project.clone()
+        } else {
+            Project::named("Untitled").normalized()
+        };
+        work.working = project;
+        work.path = path;
+    }
+
+    /// Open a file: a project keeps its path, a v1 config.json opens as an unsaved import.
+    fn open_path(&self, work: &mut Work, path: &Path) -> Result<(), String> {
+        let project = self.store.read_file(path)?;
+        let is_project = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION));
+        self.open(work, project, is_project.then(|| path.to_path_buf()));
+        Ok(())
+    }
+
+    fn write(&self, work: &mut Work, path: PathBuf) -> Result<(), String> {
+        self.store.write_file(&path, &work.working)?;
+        self.store.remember(&path);
+        work.saved = work.working.clone();
+        work.path = Some(path);
+        Ok(())
+    }
+
+    /// Let go of the single-instance lock (on exit, before a restart).
+    fn release_instance(&self) {
+        lock(&self.instance).take();
+    }
+}
+
+/// The first argument of a second launch that names an existing file.
+fn file_from_args(args: &[String], cwd: &str) -> Option<PathBuf> {
+    args.iter()
+        .skip(1)
+        .filter(|a| !a.starts_with('-'))
+        .map(|a| {
+            let p = PathBuf::from(a);
+            if p.is_absolute() {
+                p
+            } else {
+                Path::new(cwd).join(p)
+            }
+        })
+        .find(|p| p.is_file())
+}
+
+/// Remember a file the system wants opened and tell the UI.
+fn request_open(app: &AppHandle, path: PathBuf) {
+    if let Some(pending) = app.try_state::<PendingOpen>() {
+        *lock(&pending.0) = Some(path);
+    }
+    show_main_window(app);
+    if let Some(state) = app.try_state::<AppState>() {
+        state.send(Frame {
+            open_pending: true,
+            ..Frame::default()
+        });
     }
 }
 
@@ -355,6 +460,7 @@ fn subscribe(state: State<AppState>, channel: Channel<Frame>) -> Init {
             license: info::LICENSE,
             repository: info::REPOSITORY,
             data_dir: state.store.dir().display().to_string(),
+            documents_dir: state.documents.display().to_string(),
         },
         banner: info::BANNER,
         snapshot: state.engine.snapshot(),
@@ -424,10 +530,50 @@ fn update_project(state: State<AppState>, project: Value) -> Result<ProjectState
 #[tauri::command]
 fn save_project(state: State<AppState>) -> Result<ProjectState, String> {
     let mut work = lock(&state.work);
-    state.store.save(&mut work.working)?;
-    work.saved = work.working.clone();
-    state.store.remember_last(&work.saved.id);
+    let path = work.path.clone().ok_or("NO_PATH")?;
+    state.write(&mut work, path)?;
     Ok(state.project_state(&work))
+}
+
+/// Ask where to save, then save there. `None` if cancelled.
+#[tauri::command]
+async fn save_project_as(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    title: String,
+) -> Result<Option<ProjectState>, String> {
+    let (dir, name) = {
+        let work = lock(&state.work);
+        let dir = work
+            .path
+            .as_ref()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| state.documents.clone());
+        (dir, file_name_for(&work.working.name))
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let picked = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .set_directory(&dir)
+        .set_file_name(name)
+        .add_filter(info::APP_NAME, &[EXTENSION])
+        .blocking_save_file();
+    let Some(picked) = picked else { return Ok(None) };
+    let mut path = picked.into_path().map_err(|e| e.to_string())?;
+    if !path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION))
+    {
+        let mut with_ext = path.into_os_string();
+        with_ext.push(format!(".{EXTENSION}"));
+        path = PathBuf::from(with_ext);
+    }
+    let mut work = lock(&state.work);
+    state.write(&mut work, path)?;
+    Ok(Some(state.project_state(&work)))
 }
 
 #[tauri::command]
@@ -443,109 +589,58 @@ fn revert_project(state: State<AppState>) -> Result<ProjectState, String> {
 }
 
 #[tauri::command]
-fn open_project(state: State<AppState>, id: String) -> Result<ProjectState, String> {
-    let project = state.store.load(&id)?;
+fn new_project(state: State<AppState>) -> ProjectState {
     let mut work = lock(&state.work);
-    state.open(&mut work, project);
-    Ok(state.project_state(&work))
+    state.open(&mut work, Project::named("Untitled").normalized(), None);
+    state.project_state(&work)
 }
 
+/// Pick a `.vrcmt` (or a v1 `config.json`) and open it. `None` if cancelled.
 #[tauri::command]
-fn new_project(state: State<AppState>, name: String) -> Result<ProjectState, String> {
-    let mut project = Project::named(&name).normalized();
-    state.store.save(&mut project)?;
-    let mut work = lock(&state.work);
-    state.open(&mut work, project);
-    Ok(state.project_state(&work))
-}
-
-#[tauri::command]
-fn duplicate_project(state: State<AppState>, name: String) -> Result<ProjectState, String> {
-    let mut work = lock(&state.work);
-    let mut copy = work.working.clone();
-    copy.id.clear();
-    copy.name = name.trim().to_string();
-    let mut copy = copy.normalized();
-    state.store.save(&mut copy)?;
-    state.store.remember_last(&copy.id);
-    // Same settings as the running project: nothing needs to restart.
-    state
-        .engine
-        .send(EngineCmd::UpdateProject(Box::new(copy.clone())));
-    work.working = copy.clone();
-    work.saved = copy;
-    Ok(state.project_state(&work))
-}
-
-#[tauri::command]
-fn delete_project(state: State<AppState>, id: String) -> Result<ProjectState, String> {
-    let mut work = lock(&state.work);
-    state.store.delete(&id)?;
-    if work.saved.id == id {
-        // The open project is gone: open another one, or start a fresh default.
-        let next = match state.store.list().first() {
-            Some(info) => state.store.load(&info.id)?,
-            None => {
-                let mut project = Project::named("Default");
-                state.store.save(&mut project)?;
-                project
-            }
-        };
-        state.open(&mut work, next);
-    }
-    Ok(state.project_state(&work))
-}
-
-#[tauri::command]
-async fn import_project(app: AppHandle, state: State<'_, AppState>) -> Result<Option<ProjectState>, String> {
+async fn open_project_dialog(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    title: String,
+) -> Result<Option<ProjectState>, String> {
+    let dir = {
+        let work = lock(&state.work);
+        work.path
+            .as_ref()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| state.documents.clone())
+    };
     let picked = app
         .dialog()
         .file()
-        .set_title("Import config.json or project")
-        .add_filter("JSON", &["json"])
+        .set_title(title)
+        .set_directory(&dir)
+        .add_filter(info::APP_NAME, &[EXTENSION, "json"])
         .blocking_pick_file();
-    let Some(path) = picked else { return Ok(None) };
-    let path = path.into_path().map_err(|e| e.to_string())?;
-    let mut project = Store::read_import(&path)?;
-    state.store.save(&mut project)?;
+    let Some(picked) = picked else { return Ok(None) };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
     let mut work = lock(&state.work);
-    state.engine.send(EngineCmd::Log(
-        Level::Info,
-        format!("Imported {} as project '{}'", path.display(), project.name),
-    ));
-    state.open(&mut work, project);
+    state.open_path(&mut work, &path)?;
     Ok(Some(state.project_state(&work)))
 }
 
+/// Open a file by path (recent files, double-click).
 #[tauri::command]
-async fn export_project(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let mut export = lock(&state.work).working.clone();
-    // An exported file is meant to be shared: no password, no local id.
-    export.mqtt.password.clear();
-    export.id.clear();
-    let file_name: String = export
-        .name
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let picked = app
-        .dialog()
-        .file()
-        .set_title("Export project")
-        .set_file_name(format!("{}.json", file_name.trim()))
-        .add_filter("JSON", &["json"])
-        .blocking_save_file();
-    let Some(path) = picked else { return Ok(None) };
-    let path = path.into_path().map_err(|e| e.to_string())?;
-    let text = serde_json::to_string_pretty(&export).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
-    Ok(Some(path.display().to_string()))
+fn open_file(state: State<AppState>, path: String) -> Result<ProjectState, String> {
+    let mut work = lock(&state.work);
+    state.open_path(&mut work, Path::new(&path))?;
+    Ok(state.project_state(&work))
+}
+
+#[tauri::command]
+fn remove_recent(state: State<AppState>, path: String) -> ProjectState {
+    state.store.remove_recent(Path::new(&path));
+    state.project_state(&lock(&state.work))
+}
+
+/// The file the system asked to open, if any; clears the request.
+#[tauri::command]
+fn take_pending_open(pending: State<PendingOpen>) -> Option<String> {
+    lock(&pending.0).take().map(|p| p.display().to_string())
 }
 
 #[tauri::command]
@@ -608,9 +703,13 @@ fn show_main_window(app: &AppHandle) {
 pub fn run(options: Options) {
     let app = tauri::Builder::default()
         // Must be the first plugin: a second start only focuses the running window.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main_window(app)
-        }))
+        .plugin(tauri_plugin_single_instance::init(
+            |app, args, cwd| match file_from_args(&args, &cwd) {
+                Some(path) => request_open(app, path),
+                None => show_main_window(app),
+            },
+        ))
+        .manage(PendingOpen::default())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 // The window is shown by us once the engine is running.
@@ -664,13 +763,13 @@ pub fn run(options: Options) {
             clear_log,
             update_project,
             save_project,
+            save_project_as,
             revert_project,
-            open_project,
             new_project,
-            duplicate_project,
-            delete_project,
-            import_project,
-            export_project,
+            open_project_dialog,
+            open_file,
+            remove_recent,
+            take_pending_open,
             save_ui,
             open_repository,
             quit,
@@ -678,13 +777,23 @@ pub fn run(options: Options) {
         .build(tauri::generate_context!())
         .expect("failed to start the application");
 
-    app.run(|app, event| {
-        if let RunEvent::Exit = event {
-            // Release held notes, say "offline" on MQTT, close the ports.
+    app.run(|app, event| match event {
+        RunEvent::Exit => {
+            // Release held notes, say "offline" on MQTT, close the ports, then
+            // let go of the instance lock so a restart can start right away.
             if let Some(state) = app.try_state::<AppState>() {
                 state.engine.shutdown();
+                state.release_instance();
             }
         }
+        // macOS delivers files to open (double-click, "Open With") as an event.
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => {
+            if let Some(path) = urls.iter().find_map(|u| u.to_file_path().ok()) {
+                request_open(app, path);
+            }
+        }
+        _ => {}
     });
 }
 

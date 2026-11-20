@@ -5,4 +5,4 @@ mod model;
 mod store;
 
 pub use model::*;
-pub use store::{ProjectInfo, Settings, Store};
+pub use store::{file_name_for, RecentFile, Settings, Startup, Store, EXTENSION};
