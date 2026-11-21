@@ -94,8 +94,8 @@ Do not modify binary files. Incorrect edits may break local VRChat behavior.
 
 ## 7) Mapping OSC / MIDI -> Avatar and testing
 
-1. Run the `VRC-Midi-Transposer` app with your `config.json`.
-2. Make sure `osc.sending_enabled` is `true` in `config.json` or enable OSC sending at runtime from the application's console.
+1. Start VRC MIDI Transposer and select your MIDI devices.
+2. Switch on **OSC sending** on the Dashboard (or type `osc on` in the console). To have it on at every start, enable it under the startup options in the OSC view and save the project.
 3. The transposer will emit OSC messages for notes — check [`OSC_PARAMETERS.md`](./OSC_PARAMETERS.md) for the full list of parameters it sends.
 4. Configure your OSC bridge (VRChat OSC Remote or another bridge) to forward messages to the local VRChat OSC endpoint.
 5. Test a note: when a note is played, the associated parameter (e.g. `A1`) should be set to `1.0` and the blend tree will show the `A1` animation. Releasing the note should set the parameter back to `0.0` and return to `A1_off`.

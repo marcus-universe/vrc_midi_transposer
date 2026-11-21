@@ -1,0 +1,448 @@
+# Manual release: builds every package and creates a DRAFT GitHub release
+# "v<version>" that the owner reviews and publishes by hand.
+#
+#   gh workflow run release.yml --ref main
+#
+# ci.yml also calls this workflow with dry_run: true. A dry run does everything
+# except creating the release and uploads the assembled files as the artifact
+# "release-assets" instead.
+#
+# The release is created once, by the last job, after every build succeeded.
+# A failed run leaves no release behind.
+#
+# A real release is signed for the in-app updater: it needs the repository
+# secret TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD,
+# empty or unset for this key) and ships latest.json. Dry runs need no secret.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark the draft as a pre-release
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Build and assemble everything, but do not create the release
+        type: boolean
+        default: false
+    secrets:
+      # Only needed for real releases (not dry runs); see build.yml.
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
+
+# Only the last job gets write access, and only to create the release.
+permissions:
+  contents: read
+
+# One real release at a time, never cancelled half-way. Dry runs get a group
+# per ref so they neither block a release nor each other across pull requests.
+# (github.workflow is not used here: in a called workflow it is the caller's
+# name, and sharing the caller's group would deadlock the run.)
+concurrency:
+  group: ${{ inputs.dry_run && format('release-dry-run-{0}', github.ref) || 'release' }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Read version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Read the version from Cargo.toml
+        id: version
+        run: |
+          set -euo pipefail
+          # [workspace.package] version in the root Cargo.toml is the source of
+          # truth; tauri.conf.json has no version field.
+          version="$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error file=Cargo.toml::Could not read a version from [workspace.package] (got '$version')"
+            exit 1
+          fi
+
+          # package.json must be bumped together with Cargo.toml.
+          js_version="$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' package.json | head -n 1)"
+          if [ "$js_version" != "$version" ]; then
+            echo "::error file=package.json::package.json has version '$js_version' but Cargo.toml has '$version'"
+            exit 1
+          fi
+
+          # The AppStream metadata should list the release; software centres
+          # show it. Not fatal, but worth fixing before publishing.
+          if ! grep -Fq "<release version=\"$version\"" packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml; then
+            echo "::warning file=packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml::No <release version=\"$version\"> entry in the AppStream metadata"
+          fi
+
+          echo "Version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check that the tag and the release do not exist yet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          found=""
+
+          # Both answers are stored first so that a failed request fails the
+          # step instead of looking like "does not exist".
+          remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")"
+          if [ -n "$remote_tag" ]; then
+            found="tag $tag"
+          fi
+
+          # With read access this only sees published releases. Drafts are
+          # checked again by the last job, which has write access.
+          releases="$(gh release list --limit 1000 --json tagName --jq '.[].tagName')"
+          if printf '%s\n' "$releases" | grep -Fxq "$tag"; then
+            found="${found:+$found and }release $tag"
+          fi
+
+          if [ -z "$found" ]; then
+            echo "Neither a tag nor a release $tag exists."
+          elif [ "$DRY_RUN" = "true" ]; then
+            # Pull requests that do not bump the version must stay green.
+            echo "::notice::Dry run: $found already exists. A real release would stop here; bump the version first."
+          else
+            echo "::error::The $found already exists. Bump the version in Cargo.toml and package.json, or delete the old tag and release."
+            exit 1
+          fi
+
+  build:
+    name: Build
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+    with:
+      # Real releases are signed for the in-app updater; dry runs need no key.
+      updater: ${{ !inputs.dry_run }}
+    # Reusable workflows do not inherit secrets, so they are passed explicitly.
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+  release:
+    name: ${{ inputs.dry_run && 'Assemble release (dry run)' || 'Create draft release' }}
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      # Needed to create the draft release. In a dry run nothing is written.
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      # Same condition as the "updater" input of the build job.
+      UPDATER: ${{ !inputs.dry_run }}
+    steps:
+      # Each artifact lands in its own folder: artifacts/bundles-<os>-<arch>/
+      - name: Download all bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bundles-*
+          path: artifacts
+
+      - name: Rename the files
+        run: |
+          set -euo pipefail
+          base="vrc-midi-transposer_${VERSION}"
+          # release/ is uploaded. sigs/ holds the updater signatures under
+          # "<final asset name>.sig"; they only go into latest.json.
+          mkdir -p release sigs
+
+          # take <artifact> <file pattern> <final path>
+          # Copies the one file in the artifact that matches the pattern.
+          take() {
+            local dir="artifacts/$1" pattern="$2" dest="$3" count
+            count="$(find "$dir" -type f -name "$pattern" | wc -l | tr -d ' ')"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly one '$pattern' in $1, found $count"
+              find artifacts -type f | sort
+              exit 1
+            fi
+            find "$dir" -type f -name "$pattern" -exec cp {} "$dest" \;
+          }
+
+          # Names as documented in .claude/skills/release/SKILL.md. No spaces.
+          # The patterns do not match the .sig files next to the packages.
+          take bundles-windows-x64 '*-setup.exe' "release/${base}_windows_x64-setup.exe"
+          take bundles-macos-universal '*.dmg' "release/${base}_macos_universal.dmg"
+          for arch in x86_64 aarch64; do
+            take "bundles-linux-$arch" '*.deb' "release/${base}_linux_${arch}.deb"
+            take "bundles-linux-$arch" '*.rpm' "release/${base}_linux_${arch}.rpm"
+            take "bundles-linux-$arch" '*.AppImage' "release/${base}_linux_${arch}.AppImage"
+          done
+          expected=8
+
+          if [ "$UPDATER" = "true" ]; then
+            # The macOS update package; Windows and the AppImage update from
+            # the installer and the AppImage themselves.
+            take bundles-macos-universal '*.app.tar.gz' "release/${base}_macos_universal.app.tar.gz"
+            take bundles-macos-universal '*.app.tar.gz.sig' "sigs/${base}_macos_universal.app.tar.gz.sig"
+            take bundles-windows-x64 '*-setup.exe.sig' "sigs/${base}_windows_x64-setup.exe.sig"
+            for arch in x86_64 aarch64; do
+              take "bundles-linux-$arch" '*.AppImage.sig' "sigs/${base}_linux_${arch}.AppImage.sig"
+            done
+            expected=9
+          fi
+
+          count="$(find release -type f | wc -l | tr -d ' ')"
+          if [ "$count" -ne "$expected" ]; then
+            echo "::error::Expected $expected packages, found $count files"
+            exit 1
+          fi
+          ls -l release sigs
+
+      # The public key the installed apps check updates with.
+      - name: Check out the updater public key
+        if: env.UPDATER == 'true'
+        uses: actions/checkout@v7
+        with:
+          path: repo
+          sparse-checkout: src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # tauri build only warns when TAURI_SIGNING_PRIVATE_KEY does not belong
+      # to plugins.updater.pubkey, and every installed copy would then reject
+      # the update. Check each signature against the committed key and the
+      # file that is actually uploaded.
+      - name: Check the updater signatures
+        if: env.UPDATER == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          # The pubkey and the .sig files are base64 of minisign key and signature files.
+          jq -er '.plugins.updater.pubkey' repo/src-tauri/tauri.conf.json | base64 -d > updater.pub
+          checked=0
+          for sig in sigs/*.sig; do
+            asset="$(basename "$sig" .sig)"
+            if [ ! -f "release/$asset" ]; then
+              echo "::error::$sig has no package release/$asset"
+              exit 1
+            fi
+            base64 -d < "$sig" > signature.minisig
+            if ! minisign -V -q -p updater.pub -m "release/$asset" -x signature.minisig; then
+              echo "::error::The updater signature of $asset does not match the public key in src-tauri/tauri.conf.json. The TAURI_SIGNING_PRIVATE_KEY secret is a different key; installed apps would reject this update."
+              exit 1
+            fi
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -ne 4 ]; then
+            echo "::error::Expected 4 updater signatures, checked $checked"
+            exit 1
+          fi
+          rm -f signature.minisig updater.pub
+          echo "All $checked updater signatures match the committed public key."
+
+      # latest.json is what the in-app updater reads, through
+      # https://github.com/<repo>/releases/latest/download/latest.json
+      # (plugins.updater.endpoints in src-tauri/tauri.conf.json). A dry run
+      # writes it with dummy signatures to check this step, but does not ship it.
+      - name: Write latest.json
+        run: |
+          set -euo pipefail
+          base="vrc-midi-transposer_${VERSION}"
+          url_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          if [ "$UPDATER" != "true" ]; then
+            for asset in "${base}_windows_x64-setup.exe" "${base}_macos_universal.app.tar.gz" \
+                         "${base}_linux_x86_64.AppImage" "${base}_linux_aarch64.AppImage"; do
+              printf 'dry-run-signature-%s' "$asset" > "sigs/$asset.sig"
+            done
+          fi
+
+          # Keys as the updater looks them up: "<os>-<arch>-<installer>", then
+          # "<os>-<arch>". Both macOS keys point to the universal package.
+          # There must be NO bare "linux-x86_64"/"linux-aarch64" key: deb and
+          # rpm installs would fall back to it and install an AppImage.
+          platforms='{}'
+          add() {
+            local key="$1" asset="$2" sig
+            if [ ! -s "sigs/$asset.sig" ]; then
+              echo "::error::Missing signature sigs/$asset.sig"
+              exit 1
+            fi
+            # The .sig file is one line of base64; its text is the signature.
+            sig="$(tr -d '\r\n' < "sigs/$asset.sig")"
+            platforms="$(jq -c --arg key "$key" --arg sig "$sig" --arg url "$url_base/$asset" \
+              '. + {($key): {signature: $sig, url: $url}}' <<< "$platforms")"
+          }
+          add windows-x86_64 "${base}_windows_x64-setup.exe"
+          add darwin-aarch64 "${base}_macos_universal.app.tar.gz"
+          add darwin-x86_64 "${base}_macos_universal.app.tar.gz"
+          add linux-x86_64-appimage "${base}_linux_x86_64.AppImage"
+          add linux-aarch64-appimage "${base}_linux_aarch64.AppImage"
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "See https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION} for what is new." \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+
+          # Check the result: exactly these keys, every URL names a file of
+          # this release, and nothing else.
+          jq -e --arg url_base "$url_base/" '
+            (.platforms | keys) == ["darwin-aarch64", "darwin-x86_64", "linux-aarch64-appimage", "linux-x86_64-appimage", "windows-x86_64"]
+            and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+"))
+            and (.pub_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+            and ([.platforms[] | (.url | startswith($url_base)) and (.signature | length > 0)] | all)
+          ' latest.json > /dev/null
+          if [ "$UPDATER" = "true" ]; then
+            for url in $(jq -r '.platforms[].url' latest.json); do
+              if [ ! -f "release/${url##*/}" ]; then
+                echo "::error::latest.json points to ${url##*/}, which is not part of the release"
+                exit 1
+              fi
+            done
+            cp latest.json release/latest.json
+          fi
+          cat latest.json
+
+      - name: Write SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          # Checksums are made from the final names, without a path prefix.
+          # Written outside release/ first so the glob does not list it.
+          (cd release && sha256sum -- * > ../SHA256SUMS.txt)
+          mv SHA256SUMS.txt release/SHA256SUMS.txt
+          ls -l release
+          cat release/SHA256SUMS.txt
+
+      - name: Write the release notes
+        run: |
+          set -euo pipefail
+          # Quoted heredoc: nothing in the Markdown is expanded by the shell.
+          # @VERSION@ is filled in below.
+          cat > release-notes.md <<'NOTES'
+          ## What's changed
+
+          _To be written before publishing._
+
+          ## Which file do I need?
+
+          | System | File |
+          |---|---|
+          | Windows 10/11 (x64) | `vrc-midi-transposer_@VERSION@_windows_x64-setup.exe` |
+          | macOS (Intel and Apple Silicon) | `vrc-midi-transposer_@VERSION@_macos_universal.dmg` |
+          | Ubuntu, Debian, Linux Mint | `vrc-midi-transposer_@VERSION@_linux_x86_64.deb` |
+          | Fedora, openSUSE | `vrc-midi-transposer_@VERSION@_linux_x86_64.rpm` |
+          | Arch Linux, SteamOS (Steam Deck), any other Linux | `vrc-midi-transposer_@VERSION@_linux_x86_64.AppImage` |
+          | Linux on ARM64, SteamOS on Steam Frame | the same three as `_linux_aarch64` (`.deb`, `.rpm`, `.AppImage`) |
+
+          `latest.json` and the `.app.tar.gz` file are used by the update function inside the app; you do not need to download them.
+
+          The `aarch64` Linux builds (Steam Frame and other ARM64 devices) are **experimental**. Please report problems in the [issue tracker](https://github.com/marcus-universe/vrc_midi_transposer/issues).
+
+          ## First start
+
+          The builds are not signed with a paid certificate, so Windows and macOS ask for confirmation once.
+
+          - **Windows:** SmartScreen shows "Windows protected your PC". Click **More info**, then **Run anyway**.
+          - **macOS:** Open the app once and dismiss the warning, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On macOS 14 and older, right-click the app and choose **Open** instead.
+          - **Linux, AppImage:** make the file executable, then start it:
+            ```sh
+            chmod +x vrc-midi-transposer_@VERSION@_linux_x86_64.AppImage
+            ./vrc-midi-transposer_@VERSION@_linux_x86_64.AppImage
+            ```
+            If it reports that FUSE is missing, start it with `--appimage-extract-and-run`.
+          - **Linux, packages:** `sudo apt install ./vrc-midi-transposer_@VERSION@_linux_x86_64.deb` or `sudo dnf install ./vrc-midi-transposer_@VERSION@_linux_x86_64.rpm`.
+
+          ## Verify your download
+
+          `SHA256SUMS.txt` lists the SHA-256 checksum of every file. Download it into the same folder as your file, then:
+
+          ```sh
+          # Linux
+          sha256sum --check --ignore-missing SHA256SUMS.txt
+
+          # macOS
+          shasum -a 256 --check --ignore-missing SHA256SUMS.txt
+          ```
+
+          ```powershell
+          # Windows (PowerShell): compare the output with the line in SHA256SUMS.txt
+          (Get-FileHash .\vrc-midi-transposer_@VERSION@_windows_x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+          ```
+          NOTES
+          sed -i "s/@VERSION@/${VERSION}/g" release-notes.md
+
+          {
+            echo "# VRC MIDI Transposer v${VERSION}"
+            echo
+            echo '```'
+            cat release/SHA256SUMS.txt
+            echo '```'
+            echo
+            cat release-notes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the assembled release (dry run)
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Check again that no release exists, drafts included
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          # Drafts are only visible with write access, so the first job could
+          # not see them. Two drafts for one tag would be confusing.
+          releases="$(gh release list --limit 1000 --json tagName --jq '.[].tagName')"
+          if printf '%s\n' "$releases" | grep -Fxq "$tag"; then
+            echo "::error::A release or draft $tag already exists. Delete it, then run this workflow again."
+            exit 1
+          fi
+
+      - name: Create the draft release
+        id: create
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ inputs.prerelease && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          flags=(--draft --target "$GITHUB_SHA" --title "VRC MIDI Transposer $tag" --notes-file release-notes.md)
+          # A version such as 2.1.0-rc.1 is always a pre-release.
+          if [ "$PRERELEASE" = "true" ] || [[ "$VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          # The tag itself is created by GitHub when the draft is published.
+          # gh prints the URL of the draft.
+          gh release create "$tag" "${flags[@]}" release/*
+
+      - name: Remove the partial draft if creating it failed
+        if: ${{ failure() && steps.create.conclusion == 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # The step before made sure no release with this tag existed, so
+          # whatever is there now is the half-uploaded draft from this run.
+          gh release delete "v$VERSION" --yes || true

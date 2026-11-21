@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document explains how to connect the VRC MIDI Transposer to Home Assistant via MQTT. It provides a step-by-step guide for setting up the Mosquitto MQTT broker, configuring Home Assistant, and connecting your device using the `config.json`.
+This document explains how to connect the VRC MIDI Transposer to Home Assistant via MQTT. It provides a step-by-step guide for setting up the Mosquitto MQTT broker, configuring Home Assistant, and connecting the app.
 
 ---
 
@@ -37,26 +37,20 @@ This document explains how to connect the VRC MIDI Transposer to Home Assistant 
 
 ---
 
-## 3. Adjust config.json for the MIDI Transposer
+## 3. Set up MQTT in the MIDI Transposer
 
-Open your `config.json` and adjust the `mqtt` section as follows:
+Open the **MQTT** view in the app and fill in:
 
-```json
-"mqtt": {
-  "broker_host": "192.168.1.100", // IP address of your MQTT broker
-  "broker_port": 1883,
-  "username": "your_user",
-  "password": "your_password",
-  "base_topic": "midi_transposer"
-}
-```
+- **Broker host**: IP address or hostname of your MQTT broker, for example `192.168.1.100`
+- **Port**: 1883 unless you changed it
+- **User name / Password**: the credentials you created earlier
+- **Base topic**: the prefix for all MQTT messages, `midi_transposer` by default
 
-- **broker_host**: IP address or hostname of your MQTT broker
-- **broker_port**: Default is 1883
-- **username/password**: The credentials you created earlier
-- **base_topic**: The base topic for all MQTT messages (e.g., "midi_transposer")
+Switch **MQTT** on. The status block shows *Connected* when the broker accepted the connection. Press **Save** (Ctrl+S) to keep the settings in your project.
 
-Save the file and restart the VRC MIDI Transposer.
+The password is kept on this computer, never in the project file. If you open the project on another computer, enter the password there once in the MQTT view and save. See [PROJECTS.md](PROJECTS.md#the-mqtt-password).
+
+If you used version 1, open your old `config.json` with **Open…** in the project menu instead; the MQTT settings are taken over.
 
 ---
 
@@ -76,9 +70,9 @@ After starting the MIDI Transposer, the controls will automatically appear as ne
 - **No entities visible?**
   - Check if the MQTT broker is running and Home Assistant is connected.
   - Check if the discovery topics are present in the broker (e.g., with MQTT Explorer).
-  - Enable debug logging in the MIDI Transposer (`debug_enabled` set to `true`) to get more information.
+  - Enable debug logging in the MIDI Transposer (the Debug switch in the console drawer, or type `debug on`) to get more information.
 - **Wrong credentials?**
-  - Make sure the username and password in `config.json` are correct.
+  - Make sure the user name and password in the MQTT view are correct. The status block shows the broker's error message.
 - **Firewall/Network?**
   - Make sure port 1883 (or your chosen port) is open.
 

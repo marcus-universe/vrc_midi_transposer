@@ -1,0 +1,33 @@
+[Desktop Entry]
+Type=Application
+Name=VRC MIDI Transposer
+GenericName=MIDI Transposer
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}} %F
+Icon={{icon}}
+StartupWMClass={{exec}}
+Terminal=false
+Categories=AudioVideo;Audio;Midi;Music;
+Keywords=MIDI;transpose;VRChat;OSC;MQTT;piano;
+{{#if mime_type}}
+MimeType={{mime_type}};
+{{/if}}
+{{!--
+  Handlebars template for the Tauri bundler (bundle.linux.deb.desktopTemplate
+  and bundle.linux.rpm.desktopTemplate; the AppImage uses the deb one). This
+  comment is not written to the installed file.
+
+  On Linux productName is "vrc-midi-transposer" (src-tauri/tauri.linux.conf.json)
+  so that the bundler installs this as vrc-midi-transposer.desktop instead of
+  "VRC MIDI Transposer.desktop". The display name is therefore written out
+  above rather than taken from the name variable.
+
+  Variables the bundler provides (tauri-bundler 2.10, freedesktop/mod.rs):
+  categories, comment, exec, icon, name, mime_type, long_description. There
+  is no variable for the file argument, so "%F" is written out: a double-
+  clicked .vrcmt arrives as the first argument. mime_type is the list of
+  bundle.fileAssociations[].mimeType (application/x-vrcmt), defined by
+  de.marcus-universe.vrc-midi-transposer.xml in /usr/share/mime/packages/.
+--}}

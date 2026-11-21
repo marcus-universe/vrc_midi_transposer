@@ -1,0 +1,859 @@
+/*
+ * VRC MIDI Transposer: design tokens and base styles.
+ * Dark only. Tokens are documented in .claude/skills/transposer-ui/SKILL.md.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, darkest to lightest. --bg matches the window background in tauri.conf.json. */
+  --bg: #121722;
+  --surface-1: #171d2a;
+  --surface-2: #1d2433;
+  --surface-3: #262f42;
+  --surface-3-hover: #2e3850;
+  --line: #2f394e;
+  /* Boundaries of controls (inputs, switch and slider tracks): 3:1 against the card surface. */
+  --line-strong: #66728c;
+
+  --text: #e8ecf4;
+  --text-dim: #9aa5ba;
+  --text-faint: #6f7a90;
+
+  /* The one accent. */
+  --accent: #2a66f0;
+  --accent-hover: #2259dc;
+  --accent-active: #1d4fc8;
+  --accent-strong: #1c49d4;
+  --accent-soft: rgba(42, 102, 240, 0.2);
+  /* Accent tint light enough for text and focus rings on the dark surfaces. */
+  --accent-text: #8fb4ff;
+  --focus: var(--accent-text);
+  --on-accent: #ffffff;
+  --on-accent-soft: rgba(255, 255, 255, 0.16);
+  --on-accent-soft-hover: rgba(255, 255, 255, 0.26);
+  --on-accent-line: rgba(255, 255, 255, 0.3);
+  --on-accent-track: rgba(255, 255, 255, 0.72);
+  --on-accent-ink: #0b1a4a;
+
+  /* Status only. */
+  --ok: #3ecf8e;
+  --warn: #f2b84b;
+  --err: #f47086;
+  --err-soft: rgba(244, 112, 134, 0.12);
+  --warn-soft: rgba(242, 184, 75, 0.1);
+
+  --key-white: #dfe4ee;
+  --key-white-line: #9aa5ba;
+  --key-black: #10131b;
+  --backdrop: rgba(8, 11, 18, 0.62);
+
+  --scrollbar-thumb: var(--line-strong);
+  --scrollbar-track: transparent;
+
+  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
+
+  --fs-xs: 0.6875rem; /* 11px */
+  --fs-sm: 0.78125rem; /* 12.5px */
+  --fs-md: 0.875rem; /* 14px */
+  --fs-lg: 1.0625rem; /* 17px */
+  --fs-hero: 4rem;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  --r-sm: 8px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.16);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.35), 0 12px 28px rgba(0, 0, 0, 0.32);
+
+  --dur: 140ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  --rail-w: 56px;
+  --topbar-h: 48px;
+  --control-h: 34px;
+
+  accent-color: var(--accent);
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/*
+ * CJK languages name their UI fonts first, so Han characters get the glyph
+ * forms of that language (a Japanese 直 is not a Chinese 直), then fall back
+ * to the system stack. `<html lang>` is set by setLocale; :lang() matches by
+ * prefix, so zh-Hans is caught by :lang(zh).
+ */
+:root:lang(ja) {
+  --font-ui: 'Yu Gothic UI', Meiryo, 'Hiragino Sans', 'Noto Sans CJK JP', system-ui, -apple-system, 'Segoe UI',
+    Roboto, 'Helvetica Neue', 'Noto Sans', sans-serif;
+}
+
+:root:lang(zh) {
+  --font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', 'Noto Sans', sans-serif;
+}
+
+:root:lang(ko) {
+  --font-ui: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', 'Noto Sans', sans-serif;
+}
+
+/* Engines without scrollbar-color (older WebKitGTK and WKWebView) take the legacy pseudo-elements. */
+@supports not (scrollbar-color: auto) {
+  .scroller {
+    scrollbar-width: auto;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--r-pill);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  block-size: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* A desktop app: text is not selectable unless it is content worth copying. */
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+#app {
+  block-size: 100%;
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+figure {
+  margin: 0;
+}
+
+input,
+textarea,
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.scroller {
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+/* Hides content visually but keeps it in the accessibility tree. */
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Focus                                                                    */
+/* ------------------------------------------------------------------------ */
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+:where([tabindex='-1']):focus-visible {
+  outline: none;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Type helpers                                                             */
+/* ------------------------------------------------------------------------ */
+
+.label {
+  display: block;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.hint {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.link {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.link:hover {
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Cards                                                                    */
+/* ------------------------------------------------------------------------ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-inline-size: 0;
+  padding: var(--sp-4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-block-size: 28px;
+}
+
+.card-title {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.divider {
+  block-size: 1px;
+  margin: 0;
+  border: 0;
+  background: var(--line);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Buttons                                                                  */
+/* ------------------------------------------------------------------------ */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  min-block-size: 32px;
+  min-inline-size: 32px;
+  padding: 0 var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+
+.btn:hover {
+  background: var(--surface-3-hover);
+}
+
+.btn:active {
+  background: var(--line);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn-primary:active {
+  background: var(--accent-active);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.btn-ghost:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.btn-ghost:active {
+  background: var(--surface-3-hover);
+}
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.btn-danger:hover {
+  background: var(--err-soft);
+}
+
+.btn-danger:active {
+  background: var(--err-soft);
+  color: var(--text);
+}
+
+.btn-icon {
+  padding: 0;
+  inline-size: 32px;
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Fields                                                                   */
+/* ------------------------------------------------------------------------ */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}
+
+.input,
+.select {
+  inline-size: 100%;
+  min-block-size: var(--control-h);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background-color: var(--surface-3);
+  color: var(--text);
+  font: inherit;
+  transition:
+    border-color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
+}
+
+.input.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.input::placeholder {
+  color: var(--text-faint);
+}
+
+.input:hover,
+.select:hover {
+  border-color: var(--text-dim);
+}
+
+.input:read-only {
+  background-color: transparent;
+  border-color: var(--line);
+  color: var(--text-dim);
+}
+
+.input:disabled,
+.select:disabled {
+  opacity: 0.45;
+}
+
+/*
+ * Errors appear only after interaction. :is() keeps the rule alive in engines
+ * without :user-invalid, where validation.ts adds the fallback class instead.
+ */
+:is(.input, .select):is(:user-invalid, .user-invalid-fallback) {
+  border-color: var(--err);
+  background-color: var(--err-soft);
+}
+
+.error-msg {
+  display: none;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--err);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+}
+
+.error-msg svg {
+  flex: none;
+  margin-block-start: 1px;
+}
+
+:is(:user-invalid, .user-invalid-fallback) + .error-msg,
+.error-msg.is-shown {
+  display: flex;
+}
+
+/* Select: styled native control everywhere, fully styled picker where supported. */
+.select {
+  appearance: none;
+  padding-inline-end: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%239aa5ba' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+@supports (appearance: base-select) {
+  .select,
+  .select::picker(select) {
+    appearance: base-select;
+  }
+
+  /*
+   * The selected label is a box in the select's user-agent shadow tree that
+   * cannot be styled, so it cannot be shortened with an ellipsis. Instead the
+   * label stays on one line and is cut at the content box, and the chevron is
+   * the background image of the fallback, in the padding the label never
+   * reaches (a ::picker-icon would be covered by a long label).
+   */
+  .select {
+    display: inline-block;
+    align-content: center;
+    min-inline-size: 0;
+    overflow: clip;
+    overflow-clip-margin: content-box;
+    white-space: nowrap;
+  }
+
+  .select::picker-icon {
+    display: none;
+  }
+
+  .select::picker(select) {
+    white-space: normal;
+    margin-block: var(--sp-1);
+    padding: var(--sp-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    box-shadow: var(--shadow-2);
+    font-family: var(--font-ui);
+    font-size: var(--fs-md);
+  }
+
+  .select option {
+    min-block-size: 30px;
+    padding: 0 var(--sp-3) 0 var(--sp-2);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .select option:hover,
+  .select option:focus-visible {
+    background: var(--surface-3);
+  }
+
+  .select option:checked {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .select option::checkmark {
+    color: var(--accent-text);
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+/* Switch                                                                   */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * <input type="checkbox" switch>. The same drawing is used in every engine:
+ * the background colour is the thumb and an inset shadow is the track, which
+ * is also the model input-switch-polyfill uses while a thumb is dragged.
+ */
+input[type='checkbox'][switch] {
+  --switch-accent: var(--accent);
+  --switch-background: var(--line-strong);
+  --switch-thumb: var(--on-accent);
+
+  appearance: none;
+  position: relative;
+  top: 0;
+  flex: none;
+  box-sizing: content-box;
+  inline-size: 2em;
+  block-size: 1em;
+  margin: 0;
+  border: 2px solid var(--switch-background);
+  border-radius: 1em;
+  background-color: var(--switch-thumb);
+  box-shadow: inset -1em 0 0 0 var(--switch-background);
+  font-size: 16px;
+  cursor: pointer;
+  touch-action: none;
+  transition:
+    box-shadow var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+input[type='checkbox'][switch]:checked {
+  border: 2px solid var(--switch-accent);
+  box-shadow: inset 1em 0 0 0 var(--switch-accent);
+}
+
+input[type='checkbox'][switch]:hover {
+  --switch-background: var(--text-dim);
+}
+
+input[type='checkbox'][switch]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+input[type='checkbox'][switch]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (forced-colors: active) {
+  input[type='checkbox'][switch] {
+    forced-color-adjust: none;
+    --switch-accent: Highlight;
+    --switch-background: Canvas;
+    --switch-thumb: ButtonText;
+    border-color: ButtonText;
+  }
+  input[type='checkbox'][switch]:checked {
+    border-color: ButtonText;
+  }
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-block-size: 32px;
+  cursor: pointer;
+}
+
+.switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.switch-text > .hint {
+  font-weight: 400;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Range slider                                                             */
+/* ------------------------------------------------------------------------ */
+
+input[type='range'].range {
+  --slider-track-size: 6px;
+  --slider-thumb-size: 18px;
+  --slider-track-color: var(--line-strong);
+  --slider-fill-color: var(--accent);
+  --slider-thumb-color: var(--text);
+  --slider-thumb-ring: var(--surface-2);
+  --slider-direction: to right;
+
+  /* --attr-min, --attr-max and --control-value are set from script (Slider.svelte). */
+  --slider-progress: calc(progress(var(--control-value), var(--attr-min), var(--attr-max)) * 100%);
+
+  appearance: none;
+  inline-size: 100%;
+  block-size: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range'].range:dir(rtl) {
+  --slider-direction: to left;
+}
+
+@supports not (opacity: progress(1, 0, 100)) {
+  input[type='range'].range {
+    --slider-progress: calc(
+      (var(--control-value) - var(--attr-min)) / (var(--attr-max) - var(--attr-min)) * 100%
+    );
+  }
+}
+
+/* WebKit and Blink. Kept apart from the Firefox rules: one unknown pseudo-element drops a whole rule. */
+input[type='range'].range::-webkit-slider-runnable-track {
+  block-size: var(--slider-track-size);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: linear-gradient(
+    var(--slider-direction),
+    var(--slider-fill-color) var(--slider-progress),
+    var(--slider-track-color) var(--slider-progress)
+  );
+}
+
+input[type='range'].range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  inline-size: var(--slider-thumb-size);
+  block-size: var(--slider-thumb-size);
+  margin-block-start: calc((var(--slider-track-size) - var(--slider-thumb-size)) / 2);
+  border: 2px solid var(--slider-thumb-ring);
+  border-radius: 50%;
+  background: var(--slider-thumb-color);
+}
+
+input[type='range'].range::-moz-range-track {
+  block-size: var(--slider-track-size);
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--slider-track-color);
+}
+
+input[type='range'].range::-moz-range-progress {
+  block-size: var(--slider-track-size);
+  border-radius: var(--r-pill);
+  background: var(--slider-fill-color);
+}
+
+input[type='range'].range::-moz-range-thumb {
+  inline-size: var(--slider-thumb-size);
+  block-size: var(--slider-thumb-size);
+  border: 2px solid var(--slider-thumb-ring);
+  border-radius: 50%;
+  background: var(--slider-thumb-color);
+}
+
+input[type='range'].range:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Status dot and pill                                                      */
+/* ------------------------------------------------------------------------ */
+
+.dot {
+  flex: none;
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.dot.ok {
+  background: var(--ok);
+}
+
+.dot.warn {
+  background: var(--warn);
+}
+
+.dot.err {
+  background: var(--err);
+}
+
+@media (forced-colors: active) {
+  .dot {
+    forced-color-adjust: none;
+  }
+}
+
+/* A small tag beside a label, such as the MIDI trigger of a custom control. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  block-size: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Tables (editable lists)                                                  */
+/* ------------------------------------------------------------------------ */
+
+.table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.table th {
+  padding: 0 var(--sp-2) var(--sp-2);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-align: start;
+  /* A one-word header longer than its column breaks instead of running into the next one. */
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.table td {
+  padding: var(--sp-1) var(--sp-2);
+  vertical-align: top;
+}
+
+.table th:first-child,
+.table td:first-child {
+  padding-inline-start: 0;
+}
+
+.table th:last-child,
+.table td:last-child {
+  padding-inline-end: 0;
+}
+
+/* Narrow columns: less padding around the label and the chevron. */
+.table .select {
+  padding-inline: var(--sp-2) 28px;
+  background-position: right 8px center;
+}
+
+.table .cell-text {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--control-h);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Dialogs                                                                  */
+/* ------------------------------------------------------------------------ */
+
+dialog {
+  inline-size: min(440px, calc(100vw - 32px));
+  max-block-size: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: var(--shadow-2);
+}
+
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  background: var(--backdrop);
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Motion                                                                   */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * Reduced motion (on Windows this follows "Animation effects" in the system
+ * settings). Movement is switched off, but regions marked .motion-safe keep
+ * their transitions: there they only fade (piano keys) or show the live value
+ * of a control (wheels). The transpose number cross-fades instead of sliding
+ * (RollingNumber.svelte).
+ */
+@media (prefers-reduced-motion: reduce) {
+  :where(:not(.motion-safe, .motion-safe *)),
+  :where(:not(.motion-safe, .motion-safe *))::before,
+  :where(:not(.motion-safe, .motion-safe *))::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
