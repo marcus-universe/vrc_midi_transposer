@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,10 @@ pub struct Settings {
     pub last_file: Option<PathBuf>,
     /// Projects of version 2.0 (stored in `projects/`) were converted to files.
     pub migrated: bool,
+    /// Version 2.0 project ids and the files they were converted to, so that
+    /// `--project <id>` keeps working.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub migrated_ids: BTreeMap<String, PathBuf>,
     /// Version 2.0: id of the last project in `projects/`. Read for migration only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_project: Option<String>,
@@ -61,31 +66,74 @@ pub struct Startup {
 
 pub struct Store {
     dir: PathBuf,
+    /// `recent()` as last built, with the list it was built from. Reading the
+    /// files again on every call would block on slow or offline drives.
+    recent_cache: Mutex<Option<(Vec<PathBuf>, Vec<RecentFile>)>>,
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Who may read a file written by `write_atomic`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    /// The default permissions of new files.
+    Normal,
+    /// Readable and writable by the user only (unix). The file is created
+    /// that way, so it is never readable by others, not even briefly.
+    Private,
+}
+
+fn write_atomic(path: &Path, bytes: &[u8], access: Access) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
     {
-        let mut file = File::create(&tmp)?;
+        let mut options = File::options();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if access == Access::Private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+            // A tmp file left over from a crash keeps its old mode: start fresh.
+            let _ = fs::remove_file(&tmp);
+        }
+        #[cfg(not(unix))]
+        let _ = access;
+        let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
     }
     fs::rename(&tmp, path)
 }
 
-/// Files that hold secrets are readable by the user only.
-fn restrict_permissions(path: &Path) {
+/// Create the data directory and its parents. On unix the data directory
+/// itself is accessible by the user only, since it holds the MQTT passwords.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
     }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
+    builder.create(dir)
+}
+
+/// A `.vrcmt` file (any case), as opposed to a v1 `config.json` or an exported `.json`.
+pub fn is_project_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION))
+}
+
+/// The name stored in a project file, or `None` if it cannot be read.
+fn project_name_in(path: &Path) -> Option<String> {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|t| parse_file(&t, stem).ok())
+        .map(|(p, _)| p.name)
 }
 
 /// Key under which an MQTT password is kept: the broker and the user name.
@@ -192,9 +240,16 @@ impl Store {
     }
 
     pub fn open(dir: PathBuf) -> Result<Store, String> {
-        fs::create_dir_all(&dir)
+        create_private_dir(&dir)
             .map_err(|e| format!("Cannot create data directory {}: {e}", dir.display()))?;
-        Ok(Store { dir })
+        Ok(Store {
+            dir,
+            recent_cache: Mutex::new(None),
+        })
+    }
+
+    fn recent_cache(&self) -> MutexGuard<'_, Option<(Vec<PathBuf>, Vec<RecentFile>)>> {
+        self.recent_cache.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn dir(&self) -> &Path {
@@ -238,7 +293,8 @@ impl Store {
     pub fn save_settings(&self, settings: &Settings) -> Result<(), String> {
         let path = self.dir.join("settings.json");
         let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-        write_atomic(&path, text.as_bytes()).map_err(|e| format!("Cannot write {}: {e}", path.display()))
+        write_atomic(&path, text.as_bytes(), Access::Normal)
+            .map_err(|e| format!("Cannot write {}: {e}", path.display()))
     }
 
     /// Put `path` at the top of the recent files and remember it as the open file.
@@ -249,6 +305,8 @@ impl Store {
         settings.recent.truncate(RECENT_MAX);
         settings.last_file = Some(path.to_path_buf());
         let _ = self.save_settings(&settings);
+        // The file may have just been saved under a new project name.
+        self.recent_cache().take();
     }
 
     /// The open project has no file (new or imported and not saved yet).
@@ -263,26 +321,32 @@ impl Store {
         let mut settings = self.settings();
         settings.recent.retain(|p| p != path);
         let _ = self.save_settings(&settings);
+        self.recent_cache().take();
     }
 
+    /// The recent files with their project names. The files are read only when
+    /// the list changed or one of them was saved, not on every call.
     pub fn recent(&self) -> Vec<RecentFile> {
-        self.settings()
-            .recent
+        let paths = self.settings().recent;
+        let mut cache = self.recent_cache();
+        if let Some((cached_paths, list)) = cache.as_ref() {
+            if *cached_paths == paths {
+                return list.clone();
+            }
+        }
+        let list: Vec<RecentFile> = paths
             .iter()
             .map(|path| {
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-                let name = fs::read_to_string(path)
-                    .ok()
-                    .and_then(|t| parse_file(&t, stem).ok())
-                    .map(|(p, _)| p.name)
-                    .unwrap_or_else(|| stem.to_string());
                 RecentFile {
                     path: path.display().to_string(),
-                    name,
+                    name: project_name_in(path).unwrap_or_else(|| stem.to_string()),
                     exists: path.is_file(),
                 }
             })
-            .collect()
+            .collect();
+        *cache = Some((paths, list.clone()));
+        list
     }
 
     // -- Secrets --------------------------------------------------------------
@@ -297,9 +361,8 @@ impl Store {
     fn save_secrets(&self, secrets: &BTreeMap<String, String>) -> Result<(), String> {
         let path = self.dir.join("secrets.json");
         let text = serde_json::to_string_pretty(secrets).map_err(|e| e.to_string())?;
-        write_atomic(&path, text.as_bytes()).map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
-        restrict_permissions(&path);
-        Ok(())
+        write_atomic(&path, text.as_bytes(), Access::Private)
+            .map_err(|e| format!("Cannot write {}: {e}", path.display()))
     }
 
     /// Fill in the MQTT password kept on this computer for the project's broker and user.
@@ -346,7 +409,8 @@ impl Store {
             fs::create_dir_all(dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
         }
         let text = file_text(project)?;
-        write_atomic(path, text.as_bytes()).map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
+        write_atomic(path, text.as_bytes(), Access::Normal)
+            .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
         self.keep_secret(project)
     }
 
@@ -408,8 +472,10 @@ impl Store {
             .find(|(id, _)| Some(id) == last.as_ref())
             .or(converted.first())
             .map(|(_, p)| p.clone());
+        settings.migrated_ids = converted.iter().cloned().collect();
         settings.migrated = true;
         let _ = self.save_settings(&settings);
+        self.recent_cache().take();
         notes
     }
 
@@ -422,14 +488,7 @@ impl Store {
         let mut notes = self.migrate(documents);
         if let Some(path) = requested {
             match self.read_file(path) {
-                Ok(project) => {
-                    self.remember(path);
-                    return Startup {
-                        project,
-                        path: Some(path.to_path_buf()),
-                        notes,
-                    };
-                }
+                Ok(project) => return self.opened(project, path, notes),
                 Err(e) => notes.push(format!("Could not open {}: {e}", path.display())),
             }
         }
@@ -465,22 +524,73 @@ impl Store {
         }
     }
 
-    /// A project by file path, or by name among the recent files (headless `--project`).
-    pub fn find(&self, path_or_name: &str) -> Result<(Project, PathBuf), String> {
+    /// `project` was read from `path`. A project file keeps its path and is
+    /// remembered. Anything else (a v1 `config.json`, an exported 2.0 `.json`)
+    /// opens as an unsaved import, so Save never writes over it.
+    fn opened(&self, project: Project, path: &Path, mut notes: Vec<String>) -> Startup {
+        if is_project_path(path) {
+            self.remember(path);
+            return Startup {
+                project,
+                path: Some(path.to_path_buf()),
+                notes,
+            };
+        }
+        notes.push(format!(
+            "Imported {} as project '{}'",
+            path.display(),
+            project.name
+        ));
+        Startup {
+            project,
+            path: None,
+            notes,
+        }
+    }
+
+    /// `--project`: a file path, or a project name or version 2.0 project id.
+    /// Names are looked up in the recent files, the converted 2.0 projects and
+    /// the project files in `documents`. The 2.0 projects are converted first
+    /// if that has not happened yet. A project file is remembered as in `startup`.
+    pub fn find(&self, path_or_name: &str, documents: &Path) -> Result<Startup, String> {
+        let notes = self.migrate(documents);
         let as_path = PathBuf::from(path_or_name);
         if as_path.is_file() {
-            return Ok((self.read_file(&as_path)?, as_path));
+            let project = self.read_file(&as_path)?;
+            return Ok(self.opened(project, &as_path, notes));
         }
         let wanted = path_or_name.trim();
-        for recent in self.recent() {
-            if recent.exists && recent.name.eq_ignore_ascii_case(wanted) {
-                let path = PathBuf::from(&recent.path);
-                return Ok((self.read_file(&path)?, path));
+        let settings = self.settings();
+        if let Some(path) = settings.migrated_ids.get(wanted).filter(|p| p.is_file()) {
+            let project = self.read_file(path)?;
+            return Ok(self.opened(project, path, notes));
+        }
+        let mut candidates = settings.recent.clone();
+        candidates.extend(settings.migrated_ids.values().cloned());
+        if let Ok(entries) = fs::read_dir(documents) {
+            let mut files: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| is_project_path(p))
+                .collect();
+            files.sort();
+            candidates.extend(files);
+        }
+        let mut seen: Vec<PathBuf> = Vec::new();
+        for path in candidates {
+            if seen.contains(&path) || !path.is_file() {
+                continue;
             }
+            if project_name_in(&path).is_some_and(|n| n.eq_ignore_ascii_case(wanted)) {
+                let project = self.read_file(&path)?;
+                return Ok(self.opened(project, &path, notes));
+            }
+            seen.push(path);
         }
         let known: Vec<String> = self.recent().into_iter().map(|r| r.name).collect();
         Err(format!(
-            "No project file or recent project named '{wanted}'. Recent: {}",
+            "No project file, and no project named '{wanted}' in the recent files or {}. Recent: {}",
+            documents.display(),
             if known.is_empty() {
                 "none".to_string()
             } else {
@@ -652,8 +762,83 @@ mod tests {
         assert!(s.notes.iter().any(|n| n.contains("broken.vrcmt")));
 
         // Headless --project finds it by name.
-        assert_eq!(store.find("live").unwrap().1, file);
-        assert!(store.find("nothing").is_err());
+        assert_eq!(store.find("live", &docs).unwrap().path, Some(file.clone()));
+        assert!(store.find("nothing", &docs).is_err());
+
+        // A v1 config.json given as the file opens as an import: no path, not remembered.
+        let config = legacy.join("config.json");
+        for start in [
+            store.startup(Some(&config), &docs, &[]),
+            store.find(config.to_str().unwrap(), &docs).unwrap(),
+        ] {
+            assert_eq!(start.project.name, "Imported config");
+            assert_eq!(start.path, None);
+        }
+        assert_eq!(store.settings().last_file, Some(file.clone()));
+        assert!(store.recent().iter().all(|r| !r.path.ends_with("config.json")));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn find_converts_2_0_projects_first_and_knows_their_ids() {
+        let root = temp_dir("find");
+        let data = root.join("data");
+        fs::create_dir_all(data.join("projects")).unwrap();
+        for i in 0..12 {
+            let p = Project::named(&format!("Project {i}"));
+            fs::write(
+                data.join("projects").join(format!("id{i:02}.json")),
+                serde_json::to_string(&p).unwrap(),
+            )
+            .unwrap();
+        }
+        let store = Store::open(data).unwrap();
+        let docs = root.join("docs");
+
+        // First start after the update goes straight to --project, without startup().
+        let found = store.find("project 3", &docs).unwrap();
+        assert_eq!(found.project.name, "Project 3");
+        assert!(
+            found.notes.iter().any(|n| n.contains("converted")),
+            "{:?}",
+            found.notes
+        );
+        // By 2.0 id, and beyond the ten recent entries.
+        assert_eq!(store.find("id11", &docs).unwrap().project.name, "Project 11");
+        let _ = fs::remove_file(docs.join("Project 11.vrcmt"));
+        assert!(store.find("id11", &docs).is_err(), "a deleted file is not found");
+        assert_eq!(
+            store.find("Project 10", &docs).unwrap().project.name,
+            "Project 10"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recent_names_follow_saves() {
+        let root = temp_dir("recent-cache");
+        let store = Store::open(root.join("data")).unwrap();
+        let file = root.join("a.vrcmt");
+        store.write_file(&file, &Project::named("First")).unwrap();
+        store.remember(&file);
+        assert_eq!(store.recent()[0].name, "First");
+        store.write_file(&file, &Project::named("Second")).unwrap();
+        store.remember(&file);
+        assert_eq!(store.recent()[0].name, "Second");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secrets_are_private_from_the_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temp_dir("secrets");
+        let data = root.join("data");
+        let store = Store::open(data.clone()).unwrap();
+        store.keep_secret(&project_with_password()).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&data.join("secrets.json")), 0o600);
+        assert_eq!(mode(&data), 0o700);
         let _ = fs::remove_dir_all(root);
     }
 

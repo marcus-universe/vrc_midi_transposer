@@ -121,6 +121,9 @@ jobs:
       - name: Check the frontend
         run: bun run check
 
+      - name: Check the translations
+        run: bun scripts/check-i18n.ts
+
       # Must come before anything compiles src-tauri: the Tauri build script
       # and macros need the frontend "dist" folder to exist.
       - name: Build the frontend
@@ -302,6 +305,7 @@ jobs:
             /usr/bin/vrc-midi-transposer \
             /usr/share/applications/vrc-midi-transposer.desktop \
             /usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml \
+            /usr/share/mime/packages/de.marcus-universe.vrc-midi-transposer.xml \
             "$license"
           do
             if [ ! -f "$file" ]; then
@@ -310,6 +314,9 @@ jobs:
             fi
           done
           cat /usr/share/applications/vrc-midi-transposer.desktop
+          # Double-clicking a .vrcmt project needs both lines.
+          grep -qx 'MimeType=application/x-vrcmt;' /usr/share/applications/vrc-midi-transposer.desktop
+          grep -qx 'Exec=vrc-midi-transposer %F' /usr/share/applications/vrc-midi-transposer.desktop
 
       - name: Start the app
         run: |

@@ -8,23 +8,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+use tauri::utils::config::BundleType;
+use tauri::{AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-use tauri_plugin_window_state::StateFlags;
+use tauri_plugin_updater::{Update, Updater, UpdaterExt};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use transposer_engine::headless::{documents_dir, legacy_config_dirs};
-use transposer_engine::project::{file_name_for, Project, RecentFile, Store, EXTENSION};
+use transposer_engine::project::{file_name_for, is_project_path, Project, RecentFile, Store, EXTENSION};
 use transposer_engine::{info, Engine, EngineCmd, EngineEvent, Level, LogLine, Snapshot, Source};
 
 /// Events are collected for this long before one frame is sent to the webview.
 const COALESCE: Duration = Duration::from_millis(12);
 /// Upper bound of log lines per frame; older ones in a burst are dropped from the frame.
 const MAX_LOGS_PER_FRAME: usize = 300;
+/// Download progress is sent at most this often.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 pub struct Options {
     pub data_dir: Option<PathBuf>,
@@ -66,6 +70,92 @@ pub struct Frame {
     /// A file is waiting to be opened: ask about unsaved changes, then call `take_pending_open`.
     #[serde(skip_serializing_if = "is_false")]
     open_pending: bool,
+    /// Progress of `install_update`; the latest state is resent after the window was hidden.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update: Option<UpdateProgress>,
+}
+
+/// `Frame.update`: `{ state: 'downloading', downloaded, total } | { state: 'installing' }
+/// | { state: 'error', detail }`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum UpdateProgress {
+    Downloading { downloaded: u64, total: Option<u64> },
+    Installing,
+    Error { detail: String },
+}
+
+/// The answer of `check_update` when a newer version exists.
+#[derive(Serialize)]
+pub struct UpdateInfo {
+    version: String,
+    current: String,
+    date: Option<String>,
+    notes: String,
+}
+
+/// How this build is updated (`AppInfo.update_mode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateMode {
+    /// Download, verify and install in the app: NSIS, macOS app bundle, AppImage.
+    Auto,
+    /// Only tell the user and link to the release page: deb and rpm.
+    Notify,
+    /// Development build, not installed from a bundle.
+    None,
+}
+
+impl UpdateMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            UpdateMode::Auto => "auto",
+            UpdateMode::Notify => "notify",
+            UpdateMode::None => "none",
+        }
+    }
+
+    /// `bundle` is `tauri::utils::platform::bundle_type()`. On macOS that is
+    /// always `App`, so `in_app_bundle` says whether the executable really
+    /// lives in an `.app` (a `cargo run` binary does not).
+    fn from_bundle(bundle: Option<BundleType>, in_app_bundle: bool) -> Self {
+        match bundle {
+            Some(BundleType::Nsis | BundleType::AppImage) => UpdateMode::Auto,
+            Some(BundleType::App | BundleType::Dmg) if in_app_bundle => UpdateMode::Auto,
+            // The package manager owns deb and rpm installs. MSI is not built.
+            Some(BundleType::Deb | BundleType::Rpm | BundleType::Msi) => UpdateMode::Notify,
+            _ => UpdateMode::None,
+        }
+    }
+
+    fn current() -> Self {
+        let in_app_bundle = cfg!(target_os = "macos")
+            && std::env::current_exe()
+                .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+                .unwrap_or(false);
+        Self::from_bundle(tauri::utils::platform::bundle_type(), in_app_bundle)
+    }
+}
+
+/// The `latest.json` entry a check reads. `None` lets the updater choose
+/// (`<os>-<arch>-<installer>`, then `<os>-<arch>`). deb and rpm installs read
+/// the AppImage entry of their architecture, only to learn the newest version:
+/// `latest.json` has no bare `linux-<arch>` entry, and they never install.
+fn update_target(mode: UpdateMode, os: &str, arch: &str) -> Option<String> {
+    (mode == UpdateMode::Notify && os == "linux").then(|| format!("linux-{arch}-appimage"))
+}
+
+/// Release page of a version. Only plain version characters are accepted.
+fn release_url(version: &str) -> Result<String, String> {
+    let version = version.trim_start_matches('v');
+    let valid = !version.is_empty()
+        && version.len() <= 64
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'));
+    if !valid {
+        return Err(format!("Invalid version '{version}'"));
+    }
+    Ok(format!("{}/releases/tag/v{version}", info::REPOSITORY))
 }
 
 #[derive(Serialize)]
@@ -88,6 +178,8 @@ struct AppInfo {
     data_dir: String,
     /// Where Save As starts for a project that has no file yet.
     documents_dir: String,
+    /// `'auto' | 'notify' | 'none'`, see `UpdateMode`.
+    update_mode: &'static str,
 }
 
 #[derive(Serialize)]
@@ -162,6 +254,12 @@ pub struct AppState {
     /// Something was not sent while hidden; send everything when visible again.
     stale: AtomicBool,
     quitting: AtomicBool,
+    update_mode: UpdateMode,
+    /// The update found by the last `check_update`, installed by `install_update`.
+    available: Mutex<Option<Update>>,
+    /// Latest `Frame.update`, resent when the window is shown again.
+    update_progress: Mutex<Option<UpdateProgress>>,
+    installing: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -213,9 +311,9 @@ impl AppState {
             ));
             (project, None)
         } else if let Some(name) = &options.project {
-            let (project, path) = store.find(name)?;
-            store.remember(&path);
-            (project, Some(path))
+            let found = store.find(name, &documents)?;
+            notes.extend(found.notes);
+            (found.project, found.path)
         } else {
             let start = store.startup(options.file.as_deref(), &documents, &legacy_config_dirs());
             notes.extend(start.notes);
@@ -251,6 +349,10 @@ impl AppState {
             visible: AtomicBool::new(true),
             stale: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
+            update_mode: UpdateMode::current(),
+            available: Mutex::new(None),
+            update_progress: Mutex::new(None),
+            installing: AtomicBool::new(false),
         };
         Ok((state, events))
     }
@@ -296,7 +398,29 @@ impl AppState {
             cleared: true,
             close_requested: false,
             open_pending: false,
+            update: lock(&self.update_progress).clone(),
         }
+    }
+
+    /// Report updater progress. While hidden only the latest state is kept;
+    /// it goes out with the full frame when the window is shown.
+    fn send_update(&self, progress: UpdateProgress) {
+        *lock(&self.update_progress) = Some(progress.clone());
+        if self.visible.load(Ordering::Relaxed) {
+            self.send(Frame {
+                update: Some(progress),
+                ..Frame::default()
+            });
+        } else {
+            self.stale.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Release held notes, say "offline" on MQTT, close the ports and let go
+    /// of the instance lock, so that an installer or a restarted app can start.
+    fn shut_down(&self) {
+        self.engine.shutdown();
+        self.release_instance();
     }
 
     /// Make a project the open one and run it. `path: None` for an import or a new project.
@@ -321,11 +445,7 @@ impl AppState {
     /// Open a file: a project keeps its path, a v1 config.json opens as an unsaved import.
     fn open_path(&self, work: &mut Work, path: &Path) -> Result<(), String> {
         let project = self.store.read_file(path)?;
-        let is_project = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION));
-        self.open(work, project, is_project.then(|| path.to_path_buf()));
+        self.open(work, project, is_project_path(path).then(|| path.to_path_buf()));
         Ok(())
     }
 
@@ -461,6 +581,7 @@ fn subscribe(state: State<AppState>, channel: Channel<Frame>) -> Init {
             repository: info::REPOSITORY,
             data_dir: state.store.dir().display().to_string(),
             documents_dir: state.documents.display().to_string(),
+            update_mode: state.update_mode.as_str(),
         },
         banner: info::BANNER,
         snapshot: state.engine.snapshot(),
@@ -539,6 +660,7 @@ fn save_project(state: State<AppState>) -> Result<ProjectState, String> {
 #[tauri::command]
 async fn save_project_as(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     title: String,
 ) -> Result<Option<ProjectState>, String> {
@@ -552,9 +674,11 @@ async fn save_project_as(
         (dir, file_name_for(&work.working.name))
     };
     let _ = std::fs::create_dir_all(&dir);
+    // Modal to the window: nothing else can change the open project meanwhile.
     let picked = app
         .dialog()
         .file()
+        .set_parent(&window)
         .set_title(title)
         .set_directory(&dir)
         .set_file_name(name)
@@ -562,11 +686,7 @@ async fn save_project_as(
         .blocking_save_file();
     let Some(picked) = picked else { return Ok(None) };
     let mut path = picked.into_path().map_err(|e| e.to_string())?;
-    if !path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION))
-    {
+    if !is_project_path(&path) {
         let mut with_ext = path.into_os_string();
         with_ext.push(format!(".{EXTENSION}"));
         path = PathBuf::from(with_ext);
@@ -599,6 +719,7 @@ fn new_project(state: State<AppState>) -> ProjectState {
 #[tauri::command]
 async fn open_project_dialog(
     app: AppHandle,
+    window: WebviewWindow,
     state: State<'_, AppState>,
     title: String,
 ) -> Result<Option<ProjectState>, String> {
@@ -612,6 +733,7 @@ async fn open_project_dialog(
     let picked = app
         .dialog()
         .file()
+        .set_parent(&window)
         .set_title(title)
         .set_directory(&dir)
         .add_filter(info::APP_NAME, &[EXTENSION, "json"])
@@ -650,10 +772,21 @@ fn save_ui(state: State<AppState>, ui: Map<String, Value>) -> Result<(), String>
     state.store.save_settings(&settings)
 }
 
-/// Open the project page in the default browser. The URL is a constant.
+/// Open the project page in the default browser.
 #[tauri::command]
 fn open_repository() -> Result<(), String> {
-    let url = info::REPOSITORY;
+    open_url(info::REPOSITORY)
+}
+
+/// Open the release page of a version in the default browser.
+#[tauri::command]
+fn open_release(version: String) -> Result<(), String> {
+    open_url(&release_url(&version)?)
+}
+
+/// Open a URL in the default browser. Only URLs built from constants and a
+/// checked version reach this.
+fn open_url(url: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut c = std::process::Command::new("explorer");
@@ -676,6 +809,128 @@ fn open_repository() -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Cannot open {url}: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------
+
+/// The updater for this installation. On Windows, `Update::install` starts
+/// the installer and ends the process; the hook runs right before that.
+fn updater(app: &AppHandle, mode: UpdateMode) -> Result<Updater, String> {
+    let mut builder = app.updater_builder();
+    if let Some(target) = update_target(mode, std::env::consts::OS, std::env::consts::ARCH) {
+        builder = builder.target(target);
+    }
+    let handle = app.clone();
+    builder
+        .on_before_exit(move || {
+            if let Some(state) = handle.try_state::<AppState>() {
+                state.quitting.store(true, Ordering::Relaxed);
+                state.shut_down();
+            }
+            // The process ends without `RunEvent::Exit`, where this is normally saved.
+            let _ = handle.save_window_state(StateFlags::all() & !StateFlags::VISIBLE);
+            handle.cleanup_before_exit();
+        })
+        .build()
+        .map_err(|e| format!("Cannot check for updates: {e}"))
+}
+
+/// Check `latest.json` of the newest GitHub release. `None` when up to date,
+/// and also when no release has update data yet (GitHub answers 404).
+#[tauri::command]
+async fn check_update(app: AppHandle, state: State<'_, AppState>) -> Result<Option<UpdateInfo>, String> {
+    let found = match updater(&app, state.update_mode)?.check().await {
+        Ok(found) => found,
+        // The endpoint answered without a manifest (404): nothing to update to.
+        Err(tauri_plugin_updater::Error::ReleaseNotFound) => None,
+        Err(e) => return Err(format!("Update check failed: {e}")),
+    };
+    let info = found.as_ref().map(|update| UpdateInfo {
+        version: update.version.clone(),
+        current: update.current_version.clone(),
+        date: update
+            .raw_json
+            .get("pub_date")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        notes: update.body.clone().unwrap_or_default(),
+    });
+    *lock(&state.available) = found;
+    Ok(info)
+}
+
+/// Download, verify and install the update found by `check_update`, then
+/// restart. Only in `'auto'` mode. Progress arrives as `Frame.update`.
+#[tauri::command]
+async fn install_update(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.update_mode != UpdateMode::Auto {
+        return Err(
+            "This installation cannot update itself. Download the new version from the release page.".into(),
+        );
+    }
+    if state.installing.swap(true, Ordering::SeqCst) {
+        return Err("An update is already being installed.".into());
+    }
+    let result = install(&app, &state).await;
+    if let Err(detail) = &result {
+        state.send_update(UpdateProgress::Error {
+            detail: detail.clone(),
+        });
+        state.installing.store(false, Ordering::SeqCst);
+    }
+    result
+}
+
+async fn install(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let known = lock(&state.available).take();
+    let update = match known {
+        Some(update) => update,
+        None => updater(app, state.update_mode)?
+            .check()
+            .await
+            .map_err(|e| format!("Update check failed: {e}"))?
+            .ok_or("There is no update to install.")?,
+    };
+
+    state.send_update(UpdateProgress::Downloading {
+        downloaded: 0,
+        total: None,
+    });
+    let mut downloaded = 0u64;
+    let mut last = Instant::now();
+    let bytes = update
+        .download(
+            |chunk, total| {
+                downloaded += chunk as u64;
+                if last.elapsed() >= PROGRESS_INTERVAL {
+                    last = Instant::now();
+                    state.send_update(UpdateProgress::Downloading { downloaded, total });
+                }
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?;
+    state.send_update(UpdateProgress::Installing);
+
+    // Windows: does not return on success. The hook in `updater` shuts the
+    // engine down, then the installer replaces the app and starts it again.
+    // macOS and AppImage: the app is replaced in place, after the shutdown.
+    if !cfg!(target_os = "windows") {
+        state.quitting.store(true, Ordering::Relaxed);
+        state.shut_down();
+    }
+    let result = update
+        .install(&bytes)
+        .map_err(|e| format!("Installing the update failed: {e}"));
+    // Restart into the new version, or into the old one if the engine is
+    // already gone and installing failed.
+    if result.is_ok() || state.quitting.load(Ordering::Relaxed) {
+        app.request_restart();
+    }
+    result
 }
 
 #[tauri::command]
@@ -717,6 +972,8 @@ pub fn run(options: Options) {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        // Driven from Rust only (check_update, install_update); no JS API.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             match AppState::init(&options) {
                 Ok((state, events)) => {
@@ -772,6 +1029,9 @@ pub fn run(options: Options) {
             take_pending_open,
             save_ui,
             open_repository,
+            open_release,
+            check_update,
+            install_update,
             quit,
         ])
         .build(tauri::generate_context!())
@@ -842,6 +1102,96 @@ mod tests {
             serde_json::to_string(&frame).unwrap(),
             r#"{"keys":[1,0,0,0,0,0,0,0]}"#
         );
+    }
+
+    #[test]
+    fn update_frames_match_the_ipc_contract() {
+        let frame = |progress| {
+            serde_json::to_string(&Frame {
+                update: Some(progress),
+                ..Frame::default()
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            frame(UpdateProgress::Downloading {
+                downloaded: 10,
+                total: Some(20)
+            }),
+            r#"{"update":{"state":"downloading","downloaded":10,"total":20}}"#
+        );
+        assert_eq!(
+            frame(UpdateProgress::Downloading {
+                downloaded: 0,
+                total: None
+            }),
+            r#"{"update":{"state":"downloading","downloaded":0,"total":null}}"#
+        );
+        assert_eq!(
+            frame(UpdateProgress::Installing),
+            r#"{"update":{"state":"installing"}}"#
+        );
+        assert_eq!(
+            frame(UpdateProgress::Error { detail: "x".into() }),
+            r#"{"update":{"state":"error","detail":"x"}}"#
+        );
+        let info = UpdateInfo {
+            version: "2.2.0".into(),
+            current: "2.1.0".into(),
+            date: None,
+            notes: String::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&info).unwrap(),
+            r#"{"version":"2.2.0","current":"2.1.0","date":null,"notes":""}"#
+        );
+    }
+
+    #[test]
+    fn update_mode_follows_the_bundle_type() {
+        let mode = |b, in_app| UpdateMode::from_bundle(b, in_app).as_str();
+        assert_eq!(mode(Some(BundleType::Nsis), false), "auto");
+        assert_eq!(mode(Some(BundleType::AppImage), false), "auto");
+        assert_eq!(mode(Some(BundleType::App), true), "auto");
+        assert_eq!(mode(Some(BundleType::Deb), false), "notify");
+        assert_eq!(mode(Some(BundleType::Rpm), false), "notify");
+        // `cargo run` on macOS: bundle_type() says App, but there is no bundle.
+        assert_eq!(mode(Some(BundleType::App), false), "none");
+        assert_eq!(mode(None, false), "none");
+        assert_eq!(UpdateMode::from_bundle(None, true), UpdateMode::None);
+        // A test binary is not in a bundle.
+        assert_eq!(UpdateMode::current(), UpdateMode::None);
+    }
+
+    #[test]
+    fn deb_and_rpm_read_the_appimage_entry_only() {
+        assert_eq!(
+            update_target(UpdateMode::Notify, "linux", "x86_64").as_deref(),
+            Some("linux-x86_64-appimage")
+        );
+        assert_eq!(
+            update_target(UpdateMode::Notify, "linux", "aarch64").as_deref(),
+            Some("linux-aarch64-appimage")
+        );
+        // Auto mode lets the updater pick `<os>-<arch>-<installer>` / `<os>-<arch>`.
+        assert_eq!(update_target(UpdateMode::Auto, "linux", "x86_64"), None);
+        assert_eq!(update_target(UpdateMode::Auto, "windows", "x86_64"), None);
+        assert_eq!(update_target(UpdateMode::None, "macos", "aarch64"), None);
+    }
+
+    #[test]
+    fn release_urls_only_take_versions() {
+        assert_eq!(
+            release_url("2.1.0").unwrap(),
+            "https://github.com/marcus-universe/vrc_midi_transposer/releases/tag/v2.1.0"
+        );
+        assert_eq!(
+            release_url("v2.1.0-rc.1").unwrap(),
+            "https://github.com/marcus-universe/vrc_midi_transposer/releases/tag/v2.1.0-rc.1"
+        );
+        assert!(release_url("").is_err());
+        assert!(release_url("2.1.0 & calc").is_err());
+        assert!(release_url("../../evil").is_err());
     }
 
     #[test]

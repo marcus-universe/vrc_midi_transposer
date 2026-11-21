@@ -45,6 +45,20 @@
     "license": "MIT",
     "licenseFile": "../LICENSE",
     "homepage": "https://github.com/marcus-universe/vrc_midi_transposer",
+    "fileAssociations": [
+      {
+        "ext": ["vrcmt"],
+        "name": "VRC MIDI Transposer Project",
+        "description": "VRC MIDI Transposer Project",
+        "role": "Editor",
+        "rank": "Owner",
+        "mimeType": "application/x-vrcmt",
+        "exportedType": {
+          "identifier": "de.marcus-universe.vrc-midi-transposer.project",
+          "conformsTo": ["public.json", "public.data"]
+        }
+      }
+    ],
     "linux": {
       "deb": {
         "section": "sound",
@@ -52,7 +66,8 @@
         "desktopTemplate": "../packaging/linux/vrc-midi-transposer.desktop",
         "files": {
           "/usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml",
-          "/usr/share/doc/vrc-midi-transposer/copyright": "../packaging/linux/copyright"
+          "/usr/share/doc/vrc-midi-transposer/copyright": "../packaging/linux/copyright",
+          "/usr/share/mime/packages/de.marcus-universe.vrc-midi-transposer.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.xml"
         }
       },
       "rpm": {
@@ -60,18 +75,30 @@
         "desktopTemplate": "../packaging/linux/vrc-midi-transposer.desktop",
         "files": {
           "/usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml",
-          "/usr/share/licenses/vrc-midi-transposer/LICENSE": "../LICENSE"
+          "/usr/share/licenses/vrc-midi-transposer/LICENSE": "../LICENSE",
+          "/usr/share/mime/packages/de.marcus-universe.vrc-midi-transposer.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.xml"
         }
       },
       "appimage": {
         "files": {
           "/usr/share/metainfo/de.marcus-universe.vrc-midi-transposer.metainfo.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.metainfo.xml",
-          "/usr/share/doc/vrc-midi-transposer/copyright": "../packaging/linux/copyright"
+          "/usr/share/doc/vrc-midi-transposer/copyright": "../packaging/linux/copyright",
+          "/usr/share/mime/packages/de.marcus-universe.vrc-midi-transposer.xml": "../packaging/linux/de.marcus-universe.vrc-midi-transposer.xml"
         }
       }
     },
     "macOS": {
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDRUE3MDQ5OENBQzY4NjAKUldSZ2FLeU1TWERxL0pESjBHUS82L0psTDhndHlhdVA5QmxEajZTTG9wUm1pNnFPc21qUnNpUWcK",
+      "endpoints": ["https://github.com/marcus-universe/vrc_midi_transposer/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -2,12 +2,30 @@
 # Called by release.yml (and through it by ci.yml). Every job only uploads its
 # bundles as an artifact named "bundles-<os>-<arch>"; nothing is published here.
 #
+# With "updater: true" (real releases) the bundles are built with
+# src-tauri/tauri.updater.conf.json and signed with the updater key. The
+# artifacts then also hold the .sig files (and the macOS .app.tar.gz) that
+# release.yml turns into latest.json. Without it (dry runs, CI) nothing is
+# signed and no key is needed.
+#
 # All pinned versions and runner labels in this file were checked against their
 # sources on 2026-11-18. Check them again before changing any of them.
 name: Build
 
 on:
   workflow_call:
+    inputs:
+      updater:
+        description: Build and sign the updater artifacts (needs the signing key secret)
+        type: boolean
+        default: false
+    secrets:
+      # Reusable workflows do not inherit secrets; release.yml passes these.
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      # The key has no password, so this one is normally unset (empty).
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -72,7 +90,24 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build the NSIS installer
-        run: bun run build:windows
+        env:
+          UPDATER: ${{ inputs.updater }}
+          SIGNING_KEY: ${{ inputs.updater && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          SIGNING_KEY_PASSWORD: ${{ inputs.updater && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$UPDATER" = "true" ]; then
+            if [ -z "$SIGNING_KEY" ]; then
+              echo "::error::The secret TAURI_SIGNING_PRIVATE_KEY is empty or missing. See .claude/skills/release/SKILL.md."
+              exit 1
+            fi
+            export TAURI_SIGNING_PRIVATE_KEY="$SIGNING_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$SIGNING_KEY_PASSWORD"
+            # Same target and bundles as "bun run build:windows".
+            bun run tauri build --target "$TARGET" --bundles nsis --config src-tauri/tauri.updater.conf.json
+          else
+            bun run build:windows
+          fi
 
       - name: Check that the release binary starts
         timeout-minutes: 2
@@ -81,6 +116,8 @@ jobs:
           "target/$TARGET/release/vrc-midi-transposer.exe" --version
 
       - name: Collect bundles
+        env:
+          UPDATER: ${{ inputs.updater }}
         run: |
           set -euo pipefail
           mkdir -p bundles
@@ -91,6 +128,15 @@ jobs:
           if [ "$count" -ne 1 ]; then
             echo "::error::Expected exactly one NSIS installer, found $count"
             exit 1
+          fi
+          if [ "$UPDATER" = "true" ]; then
+            # The installer is also the update package; this is its signature.
+            find target -type f -path '*/release/bundle/nsis/*-setup.exe.sig' -exec cp -v {} bundles/ \;
+            count="$(find bundles -type f -name '*-setup.exe.sig' | wc -l | tr -d ' ')"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly one installer signature, found $count"
+              exit 1
+            fi
           fi
 
       - name: Upload bundles
@@ -209,7 +255,23 @@ jobs:
       - name: Build deb, rpm and AppImage
         env:
           SCRIPT: ${{ matrix.script }}
-        run: bun run "$SCRIPT"
+          UPDATER: ${{ inputs.updater }}
+          SIGNING_KEY: ${{ inputs.updater && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          SIGNING_KEY_PASSWORD: ${{ inputs.updater && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$UPDATER" = "true" ]; then
+            if [ -z "$SIGNING_KEY" ]; then
+              echo "::error::The secret TAURI_SIGNING_PRIVATE_KEY is empty or missing. See .claude/skills/release/SKILL.md."
+              exit 1
+            fi
+            export TAURI_SIGNING_PRIVATE_KEY="$SIGNING_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$SIGNING_KEY_PASSWORD"
+            # Same target and bundles as the build:linux scripts.
+            bun run tauri build --target "$TARGET" --bundles deb,rpm,appimage --config src-tauri/tauri.updater.conf.json
+          else
+            bun run "$SCRIPT"
+          fi
 
       - name: Check that the release binary starts
         timeout-minutes: 2
@@ -218,6 +280,8 @@ jobs:
           "target/$TARGET/release/vrc-midi-transposer" --version
 
       - name: Collect bundles
+        env:
+          UPDATER: ${{ inputs.updater }}
         run: |
           set -euo pipefail
           mkdir -p bundles
@@ -232,6 +296,16 @@ jobs:
               exit 1
             fi
           done
+          if [ "$UPDATER" = "true" ]; then
+            # Only the AppImage updates itself. deb and rpm installs are
+            # updated by the package manager; their signatures are not kept.
+            find target -type f -path '*/release/bundle/appimage/*.AppImage.sig' -exec cp -v {} bundles/ \;
+            count="$(find bundles -type f -name '*.AppImage.sig' | wc -l | tr -d ' ')"
+            if [ "$count" -ne 1 ]; then
+              echo "::error::Expected exactly one AppImage signature, found $count"
+              exit 1
+            fi
+          fi
 
       - name: Upload bundles
         uses: actions/upload-artifact@v7
@@ -295,7 +369,25 @@ jobs:
       # Ad-hoc signed through bundle.macOS.signingIdentity "-" in
       # tauri.conf.json; no certificate or secret is involved.
       - name: Build the app and the dmg
-        run: bun run build:macos
+        env:
+          UPDATER: ${{ inputs.updater }}
+          SIGNING_KEY: ${{ inputs.updater && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          SIGNING_KEY_PASSWORD: ${{ inputs.updater && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$UPDATER" = "true" ]; then
+            if [ -z "$SIGNING_KEY" ]; then
+              echo "::error::The secret TAURI_SIGNING_PRIVATE_KEY is empty or missing. See .claude/skills/release/SKILL.md."
+              exit 1
+            fi
+            export TAURI_SIGNING_PRIVATE_KEY="$SIGNING_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$SIGNING_KEY_PASSWORD"
+            # Same target and bundles as "bun run build:macos". The update
+            # package is the .app packed as .app.tar.gz, next to the .app.
+            bun run tauri build --target "$TARGET" --bundles app,dmg --config src-tauri/tauri.updater.conf.json
+          else
+            bun run build:macos
+          fi
 
       - name: Check that the release binary starts
         timeout-minutes: 2
@@ -304,6 +396,8 @@ jobs:
           "target/$TARGET/release/vrc-midi-transposer" --version
 
       - name: Collect bundles
+        env:
+          UPDATER: ${{ inputs.updater }}
         run: |
           set -euo pipefail
           mkdir -p bundles
@@ -313,6 +407,16 @@ jobs:
           if [ "$count" -ne 1 ]; then
             echo "::error::Expected exactly one .dmg, found $count"
             exit 1
+          fi
+          if [ "$UPDATER" = "true" ]; then
+            for pattern in '*.app.tar.gz' '*.app.tar.gz.sig'; do
+              find target -type f -path "*/release/bundle/macos/$pattern" -exec cp -v {} bundles/ \;
+              count="$(find bundles -type f -name "$pattern" | wc -l | tr -d ' ')"
+              if [ "$count" -ne 1 ]; then
+                echo "::error::Expected exactly one $pattern, found $count"
+                exit 1
+              fi
+            done
           fi
 
       - name: Upload bundles

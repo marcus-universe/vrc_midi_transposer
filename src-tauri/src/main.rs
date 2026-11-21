@@ -16,7 +16,7 @@ Without options the graphical app starts with the last project, or with FILE.
 
 Options:
   --headless           Run in the terminal without a window
-  --project <NAME>     Open this project file, or a recent project by name
+  --project <NAME>     Open this project file, or a project by name (or 2.0 id)
   --import <FILE>      Open a v1 config.json or a project file without remembering it
   --data-dir <DIR>     Use this data directory instead of the per-user default
   --version, -V        Print version, owner, license and repository

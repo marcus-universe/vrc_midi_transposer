@@ -9,6 +9,10 @@
 #
 # The release is created once, by the last job, after every build succeeded.
 # A failed run leaves no release behind.
+#
+# A real release is signed for the in-app updater: it needs the repository
+# secret TAURI_SIGNING_PRIVATE_KEY (and TAURI_SIGNING_PRIVATE_KEY_PASSWORD,
+# empty or unset for this key) and ships latest.json. Dry runs need no secret.
 name: Release
 
 on:
@@ -24,6 +28,12 @@ on:
         description: Build and assemble everything, but do not create the release
         type: boolean
         default: false
+    secrets:
+      # Only needed for real releases (not dry runs); see build.yml.
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
 
 # Only the last job gets write access, and only to create the release.
 permissions:
@@ -117,6 +127,13 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/build.yml
+    with:
+      # Real releases are signed for the in-app updater; dry runs need no key.
+      updater: ${{ !inputs.dry_run }}
+    # Reusable workflows do not inherit secrets, so they are passed explicitly.
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
   release:
     name: ${{ inputs.dry_run && 'Assemble release (dry run)' || 'Create draft release' }}
@@ -128,6 +145,8 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
+      # Same condition as the "updater" input of the build job.
+      UPDATER: ${{ !inputs.dry_run }}
     steps:
       # Each artifact lands in its own folder: artifacts/bundles-<os>-<arch>/
       - name: Download all bundles
@@ -136,16 +155,18 @@ jobs:
           pattern: bundles-*
           path: artifacts
 
-      - name: Rename the files and write SHA256SUMS.txt
+      - name: Rename the files
         run: |
           set -euo pipefail
           base="vrc-midi-transposer_${VERSION}"
-          mkdir -p release
+          # release/ is uploaded. sigs/ holds the updater signatures under
+          # "<final asset name>.sig"; they only go into latest.json.
+          mkdir -p release sigs
 
-          # take <artifact> <file pattern> <final name>
+          # take <artifact> <file pattern> <final path>
           # Copies the one file in the artifact that matches the pattern.
           take() {
-            local dir="artifacts/$1" pattern="$2" dest="release/$3" count
+            local dir="artifacts/$1" pattern="$2" dest="$3" count
             count="$(find "$dir" -type f -name "$pattern" | wc -l | tr -d ' ')"
             if [ "$count" -ne 1 ]; then
               echo "::error::Expected exactly one '$pattern' in $1, found $count"
@@ -156,22 +177,150 @@ jobs:
           }
 
           # Names as documented in .claude/skills/release/SKILL.md. No spaces.
-          take bundles-windows-x64 '*-setup.exe' "${base}_windows_x64-setup.exe"
-          take bundles-macos-universal '*.dmg' "${base}_macos_universal.dmg"
+          # The patterns do not match the .sig files next to the packages.
+          take bundles-windows-x64 '*-setup.exe' "release/${base}_windows_x64-setup.exe"
+          take bundles-macos-universal '*.dmg' "release/${base}_macos_universal.dmg"
           for arch in x86_64 aarch64; do
-            take "bundles-linux-$arch" '*.deb' "${base}_linux_${arch}.deb"
-            take "bundles-linux-$arch" '*.rpm' "${base}_linux_${arch}.rpm"
-            take "bundles-linux-$arch" '*.AppImage' "${base}_linux_${arch}.AppImage"
+            take "bundles-linux-$arch" '*.deb' "release/${base}_linux_${arch}.deb"
+            take "bundles-linux-$arch" '*.rpm' "release/${base}_linux_${arch}.rpm"
+            take "bundles-linux-$arch" '*.AppImage' "release/${base}_linux_${arch}.AppImage"
           done
+          expected=8
 
-          # Checksums are made from the final names, without a path prefix.
-          (cd release && sha256sum -- vrc-midi-transposer_* > SHA256SUMS.txt)
+          if [ "$UPDATER" = "true" ]; then
+            # The macOS update package; Windows and the AppImage update from
+            # the installer and the AppImage themselves.
+            take bundles-macos-universal '*.app.tar.gz' "release/${base}_macos_universal.app.tar.gz"
+            take bundles-macos-universal '*.app.tar.gz.sig' "sigs/${base}_macos_universal.app.tar.gz.sig"
+            take bundles-windows-x64 '*-setup.exe.sig' "sigs/${base}_windows_x64-setup.exe.sig"
+            for arch in x86_64 aarch64; do
+              take "bundles-linux-$arch" '*.AppImage.sig' "sigs/${base}_linux_${arch}.AppImage.sig"
+            done
+            expected=9
+          fi
 
           count="$(find release -type f | wc -l | tr -d ' ')"
-          if [ "$count" -ne 9 ]; then
-            echo "::error::Expected 8 packages and SHA256SUMS.txt, found $count files"
+          if [ "$count" -ne "$expected" ]; then
+            echo "::error::Expected $expected packages, found $count files"
             exit 1
           fi
+          ls -l release sigs
+
+      # The public key the installed apps check updates with.
+      - name: Check out the updater public key
+        if: env.UPDATER == 'true'
+        uses: actions/checkout@v7
+        with:
+          path: repo
+          sparse-checkout: src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # tauri build only warns when TAURI_SIGNING_PRIVATE_KEY does not belong
+      # to plugins.updater.pubkey, and every installed copy would then reject
+      # the update. Check each signature against the committed key and the
+      # file that is actually uploaded.
+      - name: Check the updater signatures
+        if: env.UPDATER == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          # The pubkey and the .sig files are base64 of minisign key and signature files.
+          jq -er '.plugins.updater.pubkey' repo/src-tauri/tauri.conf.json | base64 -d > updater.pub
+          checked=0
+          for sig in sigs/*.sig; do
+            asset="$(basename "$sig" .sig)"
+            if [ ! -f "release/$asset" ]; then
+              echo "::error::$sig has no package release/$asset"
+              exit 1
+            fi
+            base64 -d < "$sig" > signature.minisig
+            if ! minisign -V -q -p updater.pub -m "release/$asset" -x signature.minisig; then
+              echo "::error::The updater signature of $asset does not match the public key in src-tauri/tauri.conf.json. The TAURI_SIGNING_PRIVATE_KEY secret is a different key; installed apps would reject this update."
+              exit 1
+            fi
+            checked=$((checked + 1))
+          done
+          if [ "$checked" -ne 4 ]; then
+            echo "::error::Expected 4 updater signatures, checked $checked"
+            exit 1
+          fi
+          rm -f signature.minisig updater.pub
+          echo "All $checked updater signatures match the committed public key."
+
+      # latest.json is what the in-app updater reads, through
+      # https://github.com/<repo>/releases/latest/download/latest.json
+      # (plugins.updater.endpoints in src-tauri/tauri.conf.json). A dry run
+      # writes it with dummy signatures to check this step, but does not ship it.
+      - name: Write latest.json
+        run: |
+          set -euo pipefail
+          base="vrc-midi-transposer_${VERSION}"
+          url_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          if [ "$UPDATER" != "true" ]; then
+            for asset in "${base}_windows_x64-setup.exe" "${base}_macos_universal.app.tar.gz" \
+                         "${base}_linux_x86_64.AppImage" "${base}_linux_aarch64.AppImage"; do
+              printf 'dry-run-signature-%s' "$asset" > "sigs/$asset.sig"
+            done
+          fi
+
+          # Keys as the updater looks them up: "<os>-<arch>-<installer>", then
+          # "<os>-<arch>". Both macOS keys point to the universal package.
+          # There must be NO bare "linux-x86_64"/"linux-aarch64" key: deb and
+          # rpm installs would fall back to it and install an AppImage.
+          platforms='{}'
+          add() {
+            local key="$1" asset="$2" sig
+            if [ ! -s "sigs/$asset.sig" ]; then
+              echo "::error::Missing signature sigs/$asset.sig"
+              exit 1
+            fi
+            # The .sig file is one line of base64; its text is the signature.
+            sig="$(tr -d '\r\n' < "sigs/$asset.sig")"
+            platforms="$(jq -c --arg key "$key" --arg sig "$sig" --arg url "$url_base/$asset" \
+              '. + {($key): {signature: $sig, url: $url}}' <<< "$platforms")"
+          }
+          add windows-x86_64 "${base}_windows_x64-setup.exe"
+          add darwin-aarch64 "${base}_macos_universal.app.tar.gz"
+          add darwin-x86_64 "${base}_macos_universal.app.tar.gz"
+          add linux-x86_64-appimage "${base}_linux_x86_64.AppImage"
+          add linux-aarch64-appimage "${base}_linux_aarch64.AppImage"
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "See https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION} for what is new." \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+
+          # Check the result: exactly these keys, every URL names a file of
+          # this release, and nothing else.
+          jq -e --arg url_base "$url_base/" '
+            (.platforms | keys) == ["darwin-aarch64", "darwin-x86_64", "linux-aarch64-appimage", "linux-x86_64-appimage", "windows-x86_64"]
+            and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+"))
+            and (.pub_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+            and ([.platforms[] | (.url | startswith($url_base)) and (.signature | length > 0)] | all)
+          ' latest.json > /dev/null
+          if [ "$UPDATER" = "true" ]; then
+            for url in $(jq -r '.platforms[].url' latest.json); do
+              if [ ! -f "release/${url##*/}" ]; then
+                echo "::error::latest.json points to ${url##*/}, which is not part of the release"
+                exit 1
+              fi
+            done
+            cp latest.json release/latest.json
+          fi
+          cat latest.json
+
+      - name: Write SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          # Checksums are made from the final names, without a path prefix.
+          # Written outside release/ first so the glob does not list it.
+          (cd release && sha256sum -- * > ../SHA256SUMS.txt)
+          mv SHA256SUMS.txt release/SHA256SUMS.txt
           ls -l release
           cat release/SHA256SUMS.txt
 
@@ -195,6 +344,8 @@ jobs:
           | Fedora, openSUSE | `vrc-midi-transposer_@VERSION@_linux_x86_64.rpm` |
           | Arch Linux, SteamOS (Steam Deck), any other Linux | `vrc-midi-transposer_@VERSION@_linux_x86_64.AppImage` |
           | Linux on ARM64, SteamOS on Steam Frame | the same three as `_linux_aarch64` (`.deb`, `.rpm`, `.AppImage`) |
+
+          `latest.json` and the `.app.tar.gz` file are used by the update function inside the app; you do not need to download them.
 
           The `aarch64` Linux builds (Steam Frame and other ARM64 devices) are **experimental**. Please report problems in the [issue tracker](https://github.com/marcus-universe/vrc_midi_transposer/issues).
 

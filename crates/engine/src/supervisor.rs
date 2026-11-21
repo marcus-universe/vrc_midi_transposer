@@ -409,6 +409,11 @@ impl Supervisor {
     /// are applied and every service is rebuilt. Otherwise only the services
     /// whose settings changed are restarted.
     fn apply_project(&mut self, new: Project, load: bool) {
+        // Publish what MIDI changed while the old controls (and their
+        // indexes) still apply; the control values are rebuilt below.
+        if self.custom_flush_at.is_some() {
+            self.flush_custom();
+        }
         let new = Arc::new(new.normalized());
         let old = std::mem::replace(&mut self.project, new.clone());
         self.shared.set_project(new.clone());

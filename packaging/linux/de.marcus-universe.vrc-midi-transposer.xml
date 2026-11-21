@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2025-2026 Marcus Universe <contact@marcus-universe.de> -->
+<!--
+  shared-mime-info definition of the project file type. Installed to
+  /usr/share/mime/packages/ by the deb, rpm and AppImage bundles (see
+  bundle.linux in src-tauri/tauri.conf.json); the shared-mime-info package
+  rebuilds the database through its dpkg/rpm file triggers.
+
+  The type must match bundle.fileAssociations[].mimeType, which the bundler
+  writes as MimeType= into the desktop file.
+-->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-vrcmt">
+    <comment>VRC MIDI Transposer project</comment>
+    <sub-class-of type="application/json"/>
+    <!-- The app icon (Icon= in the desktop file), with a generic fallback. -->
+    <icon name="vrc-midi-transposer"/>
+    <generic-icon name="text-x-generic"/>
+    <glob pattern="*.vrcmt"/>
+  </mime-type>
+</mime-info>

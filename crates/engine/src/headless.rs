@@ -16,7 +16,7 @@ use crate::{info, Engine, EngineCmd};
 pub struct Options {
     /// Data directory; the per-user default when `None`.
     pub data_dir: Option<PathBuf>,
-    /// Project to open: a `.vrcmt` path, or the name of a recent project. The last one when `None`.
+    /// Project to open: a `.vrcmt` path, or the name (or 2.0 id) of a project. The last one when `None`.
     pub project: Option<String>,
     /// A v1 `config.json` or project file to open without remembering it.
     pub import: Option<PathBuf>,
@@ -107,9 +107,9 @@ fn run_engine(options: Options, out: &mut StandardStream) -> Result<(), String> 
         ));
         project
     } else if let Some(name) = &options.project {
-        let (project, path) = store.find(name)?;
-        store.remember(&path);
-        project
+        let found = store.find(name, &documents)?;
+        notes.extend(found.notes);
+        found.project
     } else {
         let start = store.startup(None, &documents, &legacy_config_dirs());
         notes.extend(start.notes);

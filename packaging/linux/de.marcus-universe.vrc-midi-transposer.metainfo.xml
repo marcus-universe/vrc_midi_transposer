@@ -40,6 +40,7 @@
       <li>Mirrors the pressed keys to a VRChat avatar over OSC</li>
       <li>Transpose control from VRChat over OSC</li>
       <li>Home Assistant integration over MQTT</li>
+      <li>Settings are kept in project files (.vrcmt) that open with a double-click</li>
       <li>Terminal mode without a window, started with --headless</li>
     </ul>
   </description>
@@ -68,11 +69,23 @@
 
   <provides>
     <binary>vrc-midi-transposer</binary>
+    <mediatype>application/x-vrcmt</mediatype>
   </provides>
 
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="2.1.0" date="2026-11-21">
+      <url type="details">https://github.com/marcus-universe/vrc_midi_transposer/releases/tag/v2.1.0</url>
+      <description>
+        <ul>
+          <li>Projects are saved as .vrcmt project files that open with a double-click</li>
+          <li>Custom controls can be triggered from MIDI, with MIDI Learn</li>
+          <li>The app checks for new versions and can update itself on Windows, macOS and with the AppImage</li>
+          <li>The interface is available in more languages</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.0" date="2026-11-18">
       <url type="details">https://github.com/marcus-universe/vrc_midi_transposer/releases/tag/v2.0.0</url>
       <description>
