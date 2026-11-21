@@ -48,7 +48,9 @@ Open the **MQTT** view in the app and fill in:
 
 Switch **MQTT** on. The status block shows *Connected* when the broker accepted the connection. Press **Save** (Ctrl+S) to keep the settings in your project.
 
-If you used version 1, import your old `config.json` from the project menu instead; the MQTT settings are taken over.
+The password is kept on this computer, never in the project file. If you open the project on another computer, enter the password there once in the MQTT view and save. See [PROJECTS.md](PROJECTS.md#the-mqtt-password).
+
+If you used version 1, open your old `config.json` with **Open…** in the project menu instead; the MQTT settings are taken over.
 
 ---
 
