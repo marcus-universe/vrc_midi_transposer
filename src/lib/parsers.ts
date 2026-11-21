@@ -1,47 +1,45 @@
 // Field parsers: text in, a value or an error sentence out. Used by Field.svelte.
+// Error sentences are looked up when the parser runs, inside Field's effect,
+// so a shown error follows a change of language. Inputs keep "." decimals
+// whatever the language ("," is accepted too); only displays are localised.
+
+import { t, type Key } from './i18n/i18n.svelte';
 
 export type Parsed<T> = { value: T } | { error: string };
 export type Parser<T> = (raw: string) => Parsed<T>;
 
+/** Keys of messages without placeholders, for parsers that take a message. */
+type MessageKey = Extract<Key, 'errors.projectName' | 'errors.controlName'>;
+
 export const anyText: Parser<string> = (raw) => ({ value: raw });
 
-export function nonEmpty(message: string): Parser<string> {
-  return (raw) => (raw.trim() ? { value: raw.trim() } : { error: message });
+export function nonEmpty(message: MessageKey): Parser<string> {
+  return (raw) => (raw.trim() ? { value: raw.trim() } : { error: t(message) });
 }
 
 export const host: Parser<string> = (raw) => {
   const v = raw.trim();
-  if (!v || /\s/.test(v)) {
-    return { error: 'Enter a host name or IP address without spaces, for example 127.0.0.1.' };
-  }
+  if (!v || /\s/.test(v)) return { error: t('errors.host') };
   return { value: v };
 };
 
 export const port: Parser<number> = (raw) => {
   const v = raw.trim();
   const n = Number(v);
-  if (!/^\d{1,5}$/.test(v) || n < 1 || n > 65535) {
-    return { error: 'Enter a port between 1 and 65535.' };
-  }
+  if (!/^\d{1,5}$/.test(v) || n < 1 || n > 65535) return { error: t('errors.port') };
   return { value: n };
 };
 
 export const oscPath: Parser<string> = (raw) => {
   const v = raw.trim();
-  if (!v.startsWith('/')) {
-    return { error: 'OSC addresses start with a slash, for example /transpose.' };
-  }
-  if (/\s/.test(v)) return { error: 'OSC addresses cannot contain spaces.' };
+  if (!v.startsWith('/')) return { error: t('errors.oscSlash') };
+  if (/\s/.test(v)) return { error: t('errors.oscSpaces') };
   return { value: v };
 };
 
 export const mqttTopic: Parser<string> = (raw) => {
   const v = raw.trim();
-  if (!v || /[\s#+]/.test(v) || v.startsWith('/') || v.endsWith('/')) {
-    return {
-      error: 'Enter a topic without spaces, # or +, and no slash at either end, for example midi_transposer.',
-    };
-  }
+  if (!v || /[\s#+]/.test(v) || v.startsWith('/') || v.endsWith('/')) return { error: t('errors.mqttTopic') };
   return { value: v };
 };
 
@@ -54,7 +52,7 @@ function toNumber(raw: string): number {
 export function integer(check?: (n: number) => string | null): Parser<number> {
   return (raw) => {
     const n = toNumber(raw);
-    if (!Number.isInteger(n)) return { error: 'Enter a whole number, for example 12.' };
+    if (!Number.isInteger(n)) return { error: t('errors.integer') };
     const problem = check?.(n);
     return problem ? { error: problem } : { value: n };
   };
@@ -63,7 +61,7 @@ export function integer(check?: (n: number) => string | null): Parser<number> {
 export function float(check?: (n: number) => string | null): Parser<number> {
   return (raw) => {
     const n = toNumber(raw);
-    if (!Number.isFinite(n)) return { error: 'Enter a number, for example 0.5.' };
+    if (!Number.isFinite(n)) return { error: t('errors.number') };
     const problem = check?.(n);
     return problem ? { error: problem } : { value: n };
   };

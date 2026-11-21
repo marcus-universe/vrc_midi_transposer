@@ -1,31 +1,30 @@
 <script lang="ts">
   // Every modal of the app. `app.dialog` says which one is open.
-  import { tick, untrack } from 'svelte';
   import { api } from '../ipc';
   import { app } from '../app.svelte';
-  import { nonEmpty } from '../parsers';
+  import { t, tp, type Part } from '../i18n/i18n.svelte';
   import Dialog from './Dialog.svelte';
-  import Field from './Field.svelte';
   import Icon from './Icon.svelte';
 
   const d = $derived(app.dialog);
-  const projectName = $derived(app.project.name || 'this project');
+  const projectName = $derived(app.project.name || t('project.untitled'));
 
-  // --- Name (new / duplicate) ---------------------------------------------
-  let name = $state('');
-  let nameInput = $state<HTMLInputElement>();
-  let nameRound = $state(0);
-  const nameDialog = $derived(d?.kind === 'name' ? d : null);
-
-  $effect(() => {
-    if (!nameDialog) return;
-    name = nameDialog.initial;
-    // A fresh field per round; select its text so typing replaces the suggestion.
-    untrack(() => nameRound++);
-    void tick().then(() => nameInput?.select());
+  /** The whole sentence of the unsaved-changes dialog, for what the user was about to do. */
+  const unsavedParts = $derived.by((): Part[] => {
+    if (d?.kind !== 'unsaved') return [];
+    const project = projectName;
+    switch (d.action.kind) {
+      case 'open':
+        return tp('dialogs.unsavedOpen', { project, target: d.action.name });
+      case 'openOther':
+      case 'pending':
+        return tp('dialogs.unsavedOpenOther', { project });
+      case 'new':
+        return tp('dialogs.unsavedNew', { project });
+      case 'update':
+        return tp('dialogs.unsavedUpdate', { project });
+    }
   });
-
-  const nameTaken = $derived(app.projects.some((p) => p.name === name.trim()));
 
   function close() {
     app.dialog = null;
@@ -41,6 +40,7 @@
     const pending = d?.kind === 'unsaved' ? d.proceed : null;
     close();
     if (!pending) return;
+    // Save goes through Save As when the project has no file; cancelling that cancels the action.
     if (result === 'save') void app.save().then((ok) => ok && pending());
     else if (result === 'discard') void pending();
   }
@@ -49,128 +49,86 @@
     close();
     if (result === 'revert') void app.revert();
   }
-
-  function onName(result: string) {
-    const mode = nameDialog?.mode;
-    close();
-    if (result === 'ok' && mode && name.trim()) void app.createProject(mode, name.trim());
-  }
-
-  function onDelete(result: string) {
-    close();
-    if (result === 'delete') void app.deleteProject();
-  }
 </script>
 
-<Dialog open={d?.kind === 'quit'} title="Save changes before quitting?" onclose={onQuit}>
-  <p>
-    <strong class="strong">{projectName}</strong> has changes that are not saved. If you quit without saving, they
-    are lost.
-  </p>
+<!-- The project name is set in bold wherever the language puts it in the sentence. -->
+{#snippet sentence(parts: Part[])}
+  {#each parts as part, i (i)}{#if part.param === 'project'}<strong class="strong">{part.text}</strong
+      >{:else}{part.text}{/if}{/each}
+{/snippet}
+
+<Dialog open={d?.kind === 'quit'} title={t('dialogs.quitTitle')} onclose={onQuit}>
+  <p>{@render sentence(tp('dialogs.quitBody', { project: projectName }))}</p>
   {#snippet actions()}
-    <button class="btn btn-danger first" value="discard">Discard and quit</button>
-    <button class="btn" value="cancel">Cancel</button>
+    <button class="btn btn-danger first" value="discard">{t('dialogs.discardQuit')}</button>
+    <button class="btn" value="cancel">{t('common.cancel')}</button>
     <!-- svelte-ignore a11y_autofocus -->
-    <button class="btn btn-primary" value="save" autofocus>Save and quit</button>
+    <button class="btn btn-primary" value="save" autofocus>{t('dialogs.saveQuit')}</button>
   {/snippet}
 </Dialog>
 
-<Dialog open={d?.kind === 'unsaved'} title="Save changes first?" onclose={onUnsaved}>
-  <p>
-    <strong class="strong">{projectName}</strong> has changes that are not saved. Save them before you
-    {d?.kind === 'unsaved' ? d.action : 'continue'}?
-  </p>
+<Dialog open={d?.kind === 'unsaved'} title={t('dialogs.unsavedTitle')} onclose={onUnsaved}>
+  <p>{@render sentence(unsavedParts)}</p>
   {#snippet actions()}
-    <button class="btn btn-danger first" value="discard">Discard changes</button>
-    <button class="btn" value="cancel">Cancel</button>
+    <button class="btn btn-danger first" value="discard">{t('dialogs.dontSave')}</button>
+    <button class="btn" value="cancel">{t('common.cancel')}</button>
     <!-- svelte-ignore a11y_autofocus -->
-    <button class="btn btn-primary" value="save" autofocus>Save and continue</button>
+    <button class="btn btn-primary" value="save" autofocus>{t('common.save')}</button>
   {/snippet}
 </Dialog>
 
-<Dialog open={d?.kind === 'revert'} title="Discard unsaved changes?" onclose={onRevert}>
-  <p>
-    <strong class="strong">{projectName}</strong> goes back to the way it was last saved. This cannot be undone.
-  </p>
+<Dialog open={d?.kind === 'revert'} title={t('dialogs.revertTitle')} onclose={onRevert}>
+  <p>{@render sentence(tp('dialogs.revertBody', { project: projectName }))}</p>
   {#snippet actions()}
     <!-- svelte-ignore a11y_autofocus -->
-    <button class="btn" value="cancel" autofocus>Cancel</button>
-    <button class="btn btn-danger" value="revert">Discard changes</button>
-  {/snippet}
-</Dialog>
-
-<Dialog
-  open={d?.kind === 'name'}
-  title={nameDialog?.mode === 'duplicate' ? 'Duplicate project' : 'New project'}
-  onclose={onName}
->
-  {#if nameDialog?.mode === 'duplicate'}
-    <p>Saves the current settings, including unsaved changes, as a new project and switches to it.</p>
-  {:else}
-    <p>Starts from the default settings: no MIDI ports, the seven standard OSC addresses, MQTT off.</p>
-  {/if}
-  {#key nameRound}
-    <!-- svelte-ignore a11y_autofocus -->
-    <Field
-      label="Project name"
-      value={name}
-      parse={nonEmpty('Enter a name for the project.')}
-      oncommit={(v) => (name = v)}
-      bind:input={nameInput}
-      required
-      autofocus
-      maxlength={80}
-    />
-  {/key}
-  <p class="note" aria-live="polite">
-    {#if nameTaken}Another project already has this name. You can still use it.{/if}
-  </p>
-  {#snippet actions()}
-    <!-- Not a submit button: Enter in the name field must reach the button after it. -->
-    <button type="button" class="btn" onclick={(e) => e.currentTarget.closest('dialog')?.close('cancel')}>
-      Cancel
-    </button>
-    <button class="btn btn-primary" value="ok">
-      {nameDialog?.mode === 'duplicate' ? 'Duplicate' : 'Create project'}
-    </button>
-  {/snippet}
-</Dialog>
-
-<Dialog open={d?.kind === 'delete'} title="Delete “{projectName}”?" onclose={onDelete}>
-  <p>The project file is removed from disk. This cannot be undone.</p>
-  {#snippet actions()}
-    <!-- svelte-ignore a11y_autofocus -->
-    <button class="btn" value="cancel" autofocus>Cancel</button>
-    <button class="btn btn-danger" value="delete">Delete project</button>
+    <button class="btn" value="cancel" autofocus>{t('common.cancel')}</button>
+    <button class="btn btn-danger" value="revert">{t('dialogs.discardChanges')}</button>
   {/snippet}
 </Dialog>
 
 <Dialog open={d?.kind === 'about'} title={app.app.name} onclose={close} wide>
-  <p>
-    Forwards MIDI with live transposition, mirrors pressed keys to a VRChat avatar over OSC, and exposes its
-    controls to Home Assistant over MQTT.
-  </p>
+  <p>{t('dialogs.aboutText')}</p>
   <dl class="about">
-    <dt>Version</dt>
-    <dd class="num selectable">{app.app.version || 'unknown'}</dd>
-    <dt>Made by</dt>
+    <dt>{t('dialogs.version')}</dt>
+    <dd class="num selectable">{app.app.version || t('dialogs.versionUnknown')}</dd>
+    <dt>{t('dialogs.madeBy')}</dt>
     <dd class="selectable">{app.app.owner}</dd>
-    <dt>Contact</dt>
+    <dt>{t('dialogs.contact')}</dt>
     <dd class="selectable">{app.app.email}</dd>
-    <dt>License</dt>
+    <dt>{t('dialogs.license')}</dt>
     <dd>{app.app.license}</dd>
-    <dt>Source</dt>
+    <dt>{t('dialogs.source')}</dt>
     <dd>
-      <button type="button" class="link repo" onclick={() => api.openRepository().catch((e) => app.fail(e))}>
+      <button
+        type="button"
+        class="link repo"
+        onclick={() => api.openRepository().catch((e) => app.fail(e, 'errors.openLink'))}
+      >
         <span class="selectable">{app.app.repository.replace(/^https?:\/\//, '')}</span>
         <Icon name="external" size={14} />
-        <span class="visually-hidden">(opens in your browser)</span>
+        <span class="visually-hidden">{t('dialogs.opensInBrowser')}</span>
       </button>
     </dd>
   </dl>
+  {#if app.updateCheck.state === 'available'}
+    {@const version = app.updateCheck.info.version}
+    <p class="update" role="status">
+      <span>{t('settings.available', { version })}</span>
+      <button
+        type="button"
+        class="link"
+        onclick={(e) => {
+          e.currentTarget.closest('dialog')?.close('close');
+          app.setView('settings');
+        }}
+      >
+        {t('settings.noticeView')}
+      </button>
+    </p>
+  {/if}
   {#snippet actions()}
     <!-- svelte-ignore a11y_autofocus -->
-    <button class="btn btn-primary" value="close" autofocus>Close</button>
+    <button class="btn btn-primary" value="close" autofocus>{t('common.close')}</button>
   {/snippet}
 </Dialog>
 
@@ -183,12 +141,6 @@
   /* Keeps the destructive choice away from the default one. */
   :global(.btn.first) {
     margin-inline-end: auto;
-  }
-
-  .note {
-    min-block-size: 1.45em;
-    color: var(--text-dim);
-    font-size: var(--fs-sm);
   }
 
   .about {
@@ -219,5 +171,13 @@
     align-items: center;
     gap: 6px;
     text-align: start;
+  }
+
+  .update {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-2);
+    color: var(--text);
   }
 </style>

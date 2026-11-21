@@ -77,6 +77,16 @@ export interface Snapshot {
     /** Milliseconds since the Unix epoch, 0 if none. */
     last_command_ts: number;
   };
+  /** Index of the custom control waiting for MIDI Learn, or null. */
+  learning: number | null;
+  /** Last MIDI Learn result. `seq` grows with every result, so a new one can be told apart. */
+  learned: Learned | null;
+}
+
+export interface Learned {
+  seq: number;
+  index: number;
+  trigger: MidiTrigger;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,14 +102,15 @@ export type OscRole =
   | 'osc_send_original'
   | 'osc_send_transposed';
 
-export const OSC_ROLES: { role: OscRole; label: string; hint: string }[] = [
-  { role: 'transpose', label: 'Set transpose', hint: 'Number: semitones' },
-  { role: 'transpose_up', label: 'Transpose up', hint: '1 or true: +1' },
-  { role: 'transpose_down', label: 'Transpose down', hint: '1 or true: −1' },
-  { role: 'debug_set', label: 'Debug on/off', hint: 'Number or bool' },
-  { role: 'midi_list', label: 'List MIDI devices', hint: 'Any message' },
-  { role: 'osc_send_original', label: 'Send original notes', hint: 'Any message' },
-  { role: 'osc_send_transposed', label: 'Send transposed notes', hint: 'Any message' },
+/** Every listening role, in menu order. Labels and hints are in the dictionaries (`osc.roles.<role>`). */
+export const OSC_ROLES: readonly OscRole[] = [
+  'transpose',
+  'transpose_up',
+  'transpose_down',
+  'debug_set',
+  'midi_list',
+  'osc_send_original',
+  'osc_send_transposed',
 ];
 
 export interface PortRef {
@@ -112,6 +123,21 @@ export interface ListenAddress {
   role: OscRole | null;
 }
 
+export type TriggerKind = 'cc' | 'note' | 'program';
+
+/** A MIDI message that sets a custom control (see the transposer-protocols skill). */
+export interface MidiTrigger {
+  kind: TriggerKind;
+  /** 1-16, or null for any channel. */
+  channel: number | null;
+  /** CC number, note number or program number, 0-127. */
+  number: number;
+  /** Notes only; the engine stores `toggle` for the other kinds. */
+  mode: 'toggle' | 'momentary';
+  /** Also send the message on to the MIDI output. */
+  forward: boolean;
+}
+
 export interface SendAddress {
   name: string;
   addr: string;
@@ -119,6 +145,8 @@ export interface SendAddress {
   default: number;
   min: number | null;
   max: number | null;
+  /** Absent when the control has no MIDI trigger (the shell also accepts null). */
+  midi?: MidiTrigger | null;
 }
 
 export interface Project {
@@ -157,11 +185,11 @@ export interface Project {
   debug: boolean;
 }
 
-export interface ProjectInfo {
-  id: string;
+export interface RecentFile {
+  path: string;
+  /** Project name stored in the file, or the file name if it cannot be read. */
   name: string;
-  /** Milliseconds since the Unix epoch. */
-  modified: number;
+  exists: boolean;
 }
 
 /** Returned by every project command. */
@@ -169,7 +197,10 @@ export interface ProjectState {
   project: Project;
   /** True when the working copy differs from the saved file. */
   dirty: boolean;
-  projects: ProjectInfo[];
+  /** The project file, or null for a project that was never saved (new, or an imported v1 config.json). */
+  path: string | null;
+  /** Recently used project files, newest first. */
+  recent: RecentFile[];
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +215,33 @@ export interface AppInfo {
   license: string;
   repository: string;
   data_dir: string;
+  /** Where Save As starts for a project that has no file yet. */
+  documents_dir: string;
+  /**
+   * `auto`: the app downloads and installs updates (Windows installer, macOS app, AppImage).
+   * `notify`: only tell the user and link to the release page (deb, rpm).
+   * `none`: development build, no updates.
+   */
+  update_mode: UpdateMode;
 }
+
+export type UpdateMode = 'auto' | 'notify' | 'none';
+
+/** A newer version, as found by `checkUpdate`. */
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  /** Publication date as given in latest.json (RFC 3339), or null. */
+  date: string | null;
+  /** Release notes, plain text. */
+  notes: string;
+}
+
+/** Progress of `installUpdate`, sent as `Frame.update`. */
+export type UpdateProgress =
+  | { state: 'downloading'; downloaded: number; total: number | null }
+  | { state: 'installing' }
+  | { state: 'error'; detail: string };
 
 export interface Init extends ProjectState {
   app: AppInfo;
@@ -223,6 +280,13 @@ export interface Frame {
   cleared?: boolean;
   /** The user tried to close the window with unsaved changes. Ask, then call `quit`. */
   close_requested?: boolean;
+  /**
+   * The system asked to open a file (double-click on a .vrcmt while the app
+   * runs). Ask about unsaved changes, then call `takePendingOpen`.
+   */
+  open_pending?: boolean;
+  /** Progress of `installUpdate`. */
+  update?: UpdateProgress;
 }
 
 export type EngineCmd =
@@ -234,7 +298,9 @@ export type EngineCmd =
   | { type: 'custom_osc'; index: number; value: number }
   | { type: 'refresh_ports' }
   /** Release every held note on the output and over OSC. */
-  | { type: 'panic' };
+  | { type: 'panic' }
+  /** MIDI Learn for a custom control; `index: null` cancels. The result arrives as `Snapshot.learned`. */
+  | { type: 'midi_learn'; index: number | null };
 
 // ---------------------------------------------------------------------------
 // Transport
@@ -268,20 +334,29 @@ export const api = {
 
   /** Apply the edited working copy to the running engine. Does not write to disk. */
   updateProject: (project: Project) => call<ProjectState>('update_project', { project }),
+  /** Write the project to its file. Rejects with `NO_PATH` when it has none: use `saveProjectAs`. */
   saveProject: () => call<ProjectState>('save_project'),
+  /** Native save dialog titled `title`, then save there. Null if cancelled. */
+  saveProjectAs: (title: string) => call<ProjectState | null>('save_project_as', { title }),
   revertProject: () => call<ProjectState>('revert_project'),
-  openProject: (id: string) => call<ProjectState>('open_project', { id }),
-  newProject: (name: string) => call<ProjectState>('new_project', { name }),
-  /** Save the working copy as a new project and switch to it. */
-  duplicateProject: (name: string) => call<ProjectState>('duplicate_project', { name }),
-  deleteProject: (id: string) => call<ProjectState>('delete_project', { id }),
-  /** Opens a file dialog. Accepts a v1 `config.json` or an exported project. Null if cancelled. */
-  importProject: () => call<ProjectState | null>('import_project'),
-  /** Opens a save dialog. Returns the written path, or null if cancelled. The password is not exported. */
-  exportProject: () => call<string | null>('export_project'),
+  /** Replace the open project with an untitled default one (no file yet). */
+  newProject: () => call<ProjectState>('new_project'),
+  /** Native open dialog titled `title`; accepts .vrcmt and a v1 config.json. Null if cancelled. */
+  openProjectDialog: (title: string) => call<ProjectState | null>('open_project_dialog', { title }),
+  /** Open a file by path (recent files, files the system asked to open). */
+  openFile: (path: string) => call<ProjectState>('open_file', { path }),
+  removeRecent: (path: string) => call<ProjectState>('remove_recent', { path }),
+  /** The file the system asked to open, if any; clears the request. */
+  takePendingOpen: () => call<string | null>('take_pending_open'),
 
   saveUi: (ui: Record<string, unknown>) => call<void>('save_ui', { ui }),
   openRepository: () => call<void>('open_repository'),
+  /** Open the release page of a version in the default browser. */
+  openRelease: (version: string) => call<void>('open_release', { version }),
+  /** Null when up to date (also when no release has update data yet). Rejects with a plain English sentence. */
+  checkUpdate: () => call<UpdateInfo | null>('check_update'),
+  /** Only in `auto` mode. Progress arrives as `Frame.update`; the app restarts afterwards. Ask about unsaved changes first. */
+  installUpdate: () => call<void>('install_update'),
   /** Close the app. With `force: false` the shell asks again if there are unsaved changes. */
   quit: (force: boolean) => call<void>('quit', { force }),
 };

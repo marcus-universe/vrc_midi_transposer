@@ -1,6 +1,58 @@
 // Small pure helpers shared by views and the mock.
 
-import type { ListenAddress, OscRole } from './ipc';
+import { formatClock, formatNumber, formatRelative, localeTag, t } from './i18n/i18n.svelte';
+import type { ListenAddress, MidiTrigger, OscRole } from './ipc';
+
+const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+
+/** Scientific pitch name of a MIDI note: 60 is "C4", 61 "C♯4". The same in every language. */
+export function noteName(n: number): string {
+  return `${NOTE_NAMES[((n % 12) + 12) % 12]}${Math.floor(n / 12) - 1}`;
+}
+
+/** Short label of a MIDI trigger: "CC 20 · Ch 1", "Note C4", "PC 5". */
+export function triggerLabel(m: MidiTrigger): string {
+  const what =
+    m.kind === 'cc'
+      ? t('midi.badgeCc', { number: m.number })
+      : m.kind === 'note'
+        ? t('midi.badgeNote', { note: noteName(m.number) })
+        : t('midi.badgeProgram', { number: m.number });
+  return m.channel ? `${what} · ${t('midi.badgeChannel', { channel: m.channel })}` : what;
+}
+
+/** Last part of a path, Windows or Unix. */
+export function fileName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** "C:\…\Projects\Live.vrcmt": the root and the last two parts of a long path. */
+export function shortPath(path: string, max = 44): string {
+  if (path.length <= max) return path;
+  const sep = path.includes('\\') ? '\\' : '/';
+  const parts = path.split(/[\\/]/);
+  if (parts.length <= 3) return path;
+  const head = parts[0] || '';
+  return [head, '…', ...parts.slice(-2)].join(sep);
+}
+
+/** "4.2 MB" in the active language. */
+export function formatBytes(bytes: number): string {
+  const mb = bytes / 1_000_000;
+  return formatNumber(mb, { style: 'unit', unit: 'megabyte', maximumFractionDigits: mb < 10 ? 1 : 0 });
+}
+
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+
+/** A calendar date in the active language; the input as given when it cannot be read. */
+export function formatDate(value: string | number): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  const tag = localeTag();
+  let f = dateFormats.get(tag);
+  if (!f) dateFormats.set(tag, (f = new Intl.DateTimeFormat(tag, { dateStyle: 'medium' })));
+  return f.format(d);
+}
 
 /** Default OSC path of each listening role (see the transposer-protocols skill). */
 export const DEFAULT_LISTEN_PATHS: Record<OscRole, string> = {
@@ -20,11 +72,14 @@ export function defaultListenAddresses(): ListenAddress[] {
   }));
 }
 
-/** "+3", "0", "−3" with a real minus sign so widths stay even with tabular numbers. */
+/**
+ * "+3", "0", "−3" with a real minus sign so widths stay even with tabular
+ * numbers. Digits follow the active language. For display only.
+ */
 export function signed(n: number): string {
-  if (n > 0) return `+${n}`;
-  if (n < 0) return `−${Math.abs(n)}`;
-  return '0';
+  if (n > 0) return `+${formatNumber(n)}`;
+  if (n < 0) return `−${formatNumber(Math.abs(n))}`;
+  return formatNumber(0);
 }
 
 /** MQTT slug of a custom control: lowercased, spaces replaced by underscores. */
@@ -36,25 +91,17 @@ export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }
 
-/** Trims float noise for display: 0.30000000000000004 becomes "0.3". */
+/** Trims float noise for display: 0.30000000000000004 becomes "0.3" (or "0,3"). */
 export function shortNumber(n: number, digits = 2): string {
-  return String(Number(n.toFixed(digits)));
+  return formatNumber(Number(n.toFixed(digits)), { maximumFractionDigits: digits });
 }
 
+/** "just now", "42 seconds ago", ... in the active language. */
 export function relativeTime(ts: number, now: number): string {
-  const s = Math.max(0, Math.round((now - ts) / 1000));
-  if (s < 5) return 'just now';
-  if (s < 60) return `${s} seconds ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return m === 1 ? '1 minute ago' : `${m} minutes ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return h === 1 ? '1 hour ago' : `${h} hours ago`;
-  const d = Math.round(h / 24);
-  return d === 1 ? 'yesterday' : `${d} days ago`;
+  return formatRelative(ts, now);
 }
 
+/** HH:MM:SS, 24-hour, in the active language. */
 export function clockTime(ts: number): string {
-  const d = new Date(ts);
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return formatClock(ts);
 }

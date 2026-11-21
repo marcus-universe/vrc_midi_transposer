@@ -20,6 +20,9 @@
     eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
     external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
     folder: 'M3 6h6l2 2h10v11H3z',
+    save: 'M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6',
+    download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+    learn: 'M12 12h.01M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7',
     piano: 'M3 5h18v14H3zM8 5v14M13 5v14M18 5v14',
   } as const;
 

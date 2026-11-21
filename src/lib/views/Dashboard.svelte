@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from '../app.svelte';
-  import { shortNumber, signed } from '../format';
+  import { shortNumber, signed, triggerLabel } from '../format';
+  import { t, tn } from '../i18n/i18n.svelte';
   import type { MidiStatus, PortInfo, PortRef } from '../ipc';
   import Icon from '../components/Icon.svelte';
   import RollingNumber from '../components/RollingNumber.svelte';
@@ -56,34 +57,45 @@
   function midiLine(st: MidiStatus): { tone: string; text: string } {
     switch (st.state) {
       case 'connected':
-        return { tone: 'ok', text: 'Connected' };
+        return { tone: 'ok', text: t('status.connected') };
       case 'missing':
-        return { tone: 'warn', text: 'Device missing. Plug it in or choose another port.' };
+        return { tone: 'warn', text: t('dashboard.portMissing') };
       case 'error':
-        return { tone: 'err', text: st.detail ? `Error: ${st.detail}` : 'Error: the port could not be opened.' };
+        return {
+          tone: 'err',
+          text: st.detail ? t('common.errorDetail', { detail: st.detail }) : t('dashboard.portErrorUnknown'),
+        };
       default:
-        return { tone: '', text: 'No port selected' };
+        return { tone: '', text: t('dashboard.noPort') };
     }
   }
 
   // --- Status --------------------------------------------------------------
   const listener = $derived.by(() => {
     const l = s.osc_listener;
-    if (l.state === 'running') return { tone: 'ok', text: `Listening on ${l.bound}` };
-    if (l.state === 'error') return { tone: 'err', text: l.detail ? `Error: ${l.detail}` : 'Error' };
-    return { tone: '', text: 'Stopped' };
+    if (l.state === 'running') return { tone: 'ok', text: t('dashboard.listeningOn', { address: l.bound }) };
+    if (l.state === 'error') {
+      return { tone: 'err', text: l.detail ? t('common.errorDetail', { detail: l.detail }) : t('status.error') };
+    }
+    return { tone: '', text: t('status.stopped') };
   });
 
   const mqtt = $derived.by(() => {
     switch (s.mqtt.state) {
       case 'connected':
-        return { tone: 'ok', text: `Connected to ${p.mqtt.broker_host}:${p.mqtt.broker_port}` };
+        return {
+          tone: 'ok',
+          text: t('dashboard.connectedTo', { address: `${p.mqtt.broker_host}:${p.mqtt.broker_port}` }),
+        };
       case 'connecting':
-        return { tone: 'warn', text: 'Connecting…' };
+        return { tone: 'warn', text: t('dashboard.connectingEllipsis') };
       case 'error':
-        return { tone: 'err', text: s.mqtt.detail ? `Error: ${s.mqtt.detail}` : 'Error' };
+        return {
+          tone: 'err',
+          text: s.mqtt.detail ? t('common.errorDetail', { detail: s.mqtt.detail }) : t('status.error'),
+        };
       default:
-        return { tone: '', text: 'Off' };
+        return { tone: '', text: t('status.off') };
     }
   });
 
@@ -92,21 +104,21 @@
 </script>
 
 <div class="dash">
-  <h1 class="visually-hidden">Dashboard</h1>
+  <h1 class="visually-hidden">{t('dashboard.title')}</h1>
 
   <!-- Transpose hero -->
   <section class="hero" aria-labelledby="hero-title">
     <div class="rings" aria-hidden="true"></div>
     <div class="hero-head">
-      <h2 id="hero-title">Transpose</h2>
-      <span class="unit">semitones</span>
+      <h2 id="hero-title">{t('dashboard.transpose')}</h2>
+      <span class="unit">{t('dashboard.semitones')}</span>
     </div>
 
     <div class="hero-main">
       <button
         type="button"
         class="round"
-        aria-label="Transpose down one semitone"
+        aria-label={t('dashboard.down')}
         aria-disabled={s.transpose <= s.transpose_min}
         onclick={() => nudge(-1)}
       >
@@ -116,7 +128,7 @@
       <button
         type="button"
         class="round"
-        aria-label="Transpose up one semitone"
+        aria-label={t('dashboard.up')}
         aria-disabled={s.transpose >= s.transpose_max}
         onclick={() => nudge(1)}
       >
@@ -126,11 +138,11 @@
 
     <div class="hero-range">
       <Slider
-        aria-label="Transpose"
+        aria-label={t('dashboard.transpose')}
         value={s.transpose}
         min={s.transpose_min}
         max={s.transpose_max}
-        valueText="{signed(shown)} semitones"
+        valueText={tn('dashboard.semitoneValue', Math.abs(shown), { value: signed(shown) })}
         oninput={(value) => app.engineCoalesced('transpose', { type: 'set_transpose', value })}
         bind:shown
       />
@@ -145,7 +157,7 @@
         aria-disabled={s.transpose === 0}
         onclick={() => s.transpose !== 0 && app.engine({ type: 'set_transpose', value: 0 })}
       >
-        Reset to 0
+        {t('dashboard.reset')}
       </button>
       <span class="num">{signed(s.transpose_max)}</span>
     </div>
@@ -158,8 +170,8 @@
       <button
         type="button"
         class="btn btn-ghost btn-icon"
-        aria-label="Refresh MIDI ports"
-        title="Refresh MIDI ports"
+        aria-label={t('dashboard.refreshPorts')}
+        title={t('dashboard.refreshPorts')}
         onclick={() => app.engine({ type: 'refresh_ports' })}
       >
         <Icon name="refresh" size={16} />
@@ -178,12 +190,12 @@
           aria-describedby="midi-{which}-state"
           onchange={(e) => choose(which, e.currentTarget.value)}
         >
-          <option value={NONE}>None</option>
+          <option value={NONE}>{t('common.none')}</option>
           {#each ports as port (port.id)}
             <option value={port.id}>{port.name}</option>
           {/each}
           {#if sel.extra}
-            <option value={SAVED}>{sel.extra.name || 'Saved port'} (not connected)</option>
+            <option value={SAVED}>{t('dashboard.notConnected', { name: sel.extra.name || t('dashboard.savedPort') })}</option>
           {/if}
         </select>
         <p class="state" id="midi-{which}-state">
@@ -193,29 +205,31 @@
       </div>
     {/snippet}
 
-    {@render portField('input', 'Input', inSel, s.inputs, s.midi_in)}
-    {@render portField('output', 'Output', outSel, s.outputs, s.midi_out)}
+    {@render portField('input', t('dashboard.input'), inSel, s.inputs, s.midi_in)}
+    {@render portField('output', t('dashboard.output'), outSel, s.outputs, s.midi_out)}
   </section>
 
   <!-- Status -->
   <section class="card" aria-labelledby="status-title">
     <div class="card-head">
-      <h2 class="card-title" id="status-title">Status</h2>
+      <h2 class="card-title" id="status-title">{t('common.status')}</h2>
     </div>
 
     <Switch
-      label="OSC sending"
-      hint="Pressed keys go to VRChat at {s.osc_target || 'the target'}"
+      label={t('dashboard.oscSending')}
+      hint={s.osc_target
+        ? t('dashboard.oscSendingHint', { target: s.osc_target })
+        : t('dashboard.oscSendingHintNoTarget')}
       checked={s.osc_sending}
       onchange={(on) => app.engine({ type: 'set_osc_sending', on })}
     />
 
     <Segmented
       showLabel
-      label="Notes to send"
+      label={t('dashboard.notesToSend')}
       options={[
-        { value: 'original', label: 'Original' },
-        { value: 'transposed', label: 'Transposed' },
+        { value: 'original', label: t('dashboard.original') },
+        { value: 'transposed', label: t('dashboard.transposed') },
       ]}
       value={s.send_original ? 'original' : 'transposed'}
       onchange={(v) => app.engine({ type: 'set_send_original', on: v === 'original' })}
@@ -224,7 +238,7 @@
     <hr class="divider" />
 
     <dl class="states">
-      <dt>OSC listener</dt>
+      <dt>{t('dashboard.oscListener')}</dt>
       <dd><span class={['dot', listener.tone]}></span><span>{listener.text}</span></dd>
       <dt>MQTT</dt>
       <dd><span class={['dot', mqtt.tone]}></span><span>{mqtt.text}</span></dd>
@@ -234,9 +248,9 @@
   <!-- Custom controls -->
   <section class="card custom" aria-labelledby="custom-title">
     <div class="card-head">
-      <h2 class="card-title" id="custom-title">Custom controls</h2>
+      <h2 class="card-title" id="custom-title">{t('common.customControls')}</h2>
       {#if controls.length}
-        <button type="button" class="btn btn-ghost edit" onclick={() => app.setView('osc')}>Edit</button>
+        <button type="button" class="btn btn-ghost edit" onclick={() => app.setView('osc')}>{t('dashboard.edit')}</button>
       {/if}
     </div>
 
@@ -247,8 +261,10 @@
           <li class="control">
             {#if c.type === 'bool'}
               <Switch
-                label={c.name || 'Unnamed control'}
+                label={c.name || t('common.unnamedControl')}
                 hint={c.addr}
+                badge={c.midi ? triggerLabel(c.midi) : undefined}
+                badgePrefix={t('midi.badgePrefix')}
                 checked={v >= 0.5}
                 onchange={(on) => app.engine({ type: 'custom_osc', index: i, value: on ? 1 : 0 })}
               />
@@ -257,11 +273,19 @@
               {@const max = c.max ?? 1}
               <div class="float">
                 <div class="float-head">
-                  <label for="custom-{i}">{c.name || 'Unnamed control'}</label>
+                  <span class="float-name">
+                    <label for="custom-{i}">{c.name || t('common.unnamedControl')}</label>
+                    {#if c.midi}
+                      <span class="badge" id="custom-{i}-trigger">
+                        <span class="visually-hidden">{`${t('midi.badgePrefix')} `}</span>{triggerLabel(c.midi)}
+                      </span>
+                    {/if}
+                  </span>
                   <span class="num readout">{shortNumber(v)}</span>
                 </div>
                 <Slider
                   id="custom-{i}"
+                  aria-describedby={c.midi ? `custom-${i}-trigger` : undefined}
                   value={v}
                   {min}
                   max={max > min ? max : min + 1}
@@ -276,8 +300,8 @@
       </ul>
     {:else}
       <div class="empty">
-        <p>No custom controls yet. Add switches and sliders for your avatar parameters in the OSC view.</p>
-        <button type="button" class="btn" onclick={() => app.setView('osc')}>Open OSC view</button>
+        <p>{t('dashboard.customEmpty')}</p>
+        <button type="button" class="btn" onclick={() => app.setView('osc')}>{t('dashboard.openOsc')}</button>
       </div>
     {/if}
   </section>
@@ -552,6 +576,14 @@
     align-items: baseline;
     justify-content: space-between;
     gap: var(--sp-3);
+  }
+
+  .float-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px var(--sp-2);
+    min-inline-size: 0;
   }
 
   .readout {

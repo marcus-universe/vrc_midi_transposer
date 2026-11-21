@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app } from '../app.svelte';
+  import { t } from '../i18n/i18n.svelte';
   import Icon from './Icon.svelte';
   import ProjectMenu from './ProjectMenu.svelte';
 
@@ -11,31 +12,31 @@
   const midi = $derived.by((): Pill => {
     const a = s.midi_in.state;
     const b = s.midi_out.state;
-    if (a === 'error' || b === 'error') return { name: 'MIDI', tone: 'err', word: 'Error' };
-    if (a === 'missing' || b === 'missing') return { name: 'MIDI', tone: 'warn', word: 'Device missing' };
-    if (a === 'connected' && b === 'connected') return { name: 'MIDI', tone: 'ok', word: 'Connected' };
-    if (a === 'connected') return { name: 'MIDI', tone: 'warn', word: 'No output' };
-    if (b === 'connected') return { name: 'MIDI', tone: 'warn', word: 'No input' };
-    return { name: 'MIDI', tone: '', word: 'Not set' };
+    if (a === 'error' || b === 'error') return { name: 'MIDI', tone: 'err', word: t('status.error') };
+    if (a === 'missing' || b === 'missing') return { name: 'MIDI', tone: 'warn', word: t('status.deviceMissing') };
+    if (a === 'connected' && b === 'connected') return { name: 'MIDI', tone: 'ok', word: t('status.connected') };
+    if (a === 'connected') return { name: 'MIDI', tone: 'warn', word: t('status.noOutput') };
+    if (b === 'connected') return { name: 'MIDI', tone: 'warn', word: t('status.noInput') };
+    return { name: 'MIDI', tone: '', word: t('status.notSet') };
   });
 
   const osc = $derived.by((): Pill => {
-    if (s.osc_listener.state === 'error') return { name: 'OSC', tone: 'err', word: 'Error' };
-    if (s.osc_sending) return { name: 'OSC', tone: 'ok', word: 'Sending' };
-    if (s.osc_listener.state === 'running') return { name: 'OSC', tone: 'ok', word: 'Listening' };
-    return { name: 'OSC', tone: '', word: 'Stopped' };
+    if (s.osc_listener.state === 'error') return { name: 'OSC', tone: 'err', word: t('status.error') };
+    if (s.osc_sending) return { name: 'OSC', tone: 'ok', word: t('status.sending') };
+    if (s.osc_listener.state === 'running') return { name: 'OSC', tone: 'ok', word: t('status.listening') };
+    return { name: 'OSC', tone: '', word: t('status.stopped') };
   });
 
   const mqtt = $derived.by((): Pill => {
     switch (s.mqtt.state) {
       case 'connected':
-        return { name: 'MQTT', tone: 'ok', word: 'Connected' };
+        return { name: 'MQTT', tone: 'ok', word: t('status.connected') };
       case 'connecting':
-        return { name: 'MQTT', tone: 'warn', word: 'Connecting' };
+        return { name: 'MQTT', tone: 'warn', word: t('status.connecting') };
       case 'error':
-        return { name: 'MQTT', tone: 'err', word: 'Error' };
+        return { name: 'MQTT', tone: 'err', word: t('status.error') };
       default:
-        return { name: 'MQTT', tone: '', word: 'Off' };
+        return { name: 'MQTT', tone: '', word: t('status.off') };
     }
   });
 
@@ -45,19 +46,26 @@
 <header class="topbar">
   <ProjectMenu />
 
-  <button type="button" class="btn btn-primary" disabled={!app.dirty || app.busy} onclick={() => app.save()}>
-    Save
+  <button
+    type="button"
+    class="btn btn-primary"
+    disabled={!app.dirty || app.busy}
+    aria-keyshortcuts="Control+S"
+    title={app.path === null ? t('project.saveAs') : undefined}
+    onclick={() => app.save()}
+  >
+    {t('common.save')}
   </button>
   <button
     type="button"
     class="btn btn-ghost"
-    disabled={!app.dirty || app.busy}
+    disabled={!app.dirty || app.busy || app.path === null}
     onclick={() => (app.dialog = { kind: 'revert' })}
   >
-    Revert
+    {t('common.revert')}
   </button>
 
-  <ul class="pills" aria-label="Connection status">
+  <ul class="pills" aria-label={t('topbar.connectionStatus')}>
     {#each pills as p (p.name)}
       <li class="pill">
         <span class="pill-name">{p.name}</span>
@@ -70,9 +78,9 @@
   <button
     type="button"
     class={['btn btn-ghost btn-icon', app.ui.console_open && 'pressed']}
-    aria-label="Console"
+    aria-label={t('topbar.console')}
     aria-pressed={app.ui.console_open}
-    title="Console (Ctrl+`)"
+    title={t('topbar.consoleTip')}
     onclick={() => app.toggleConsole()}
   >
     <Icon name="terminal" />

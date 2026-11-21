@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from '../app.svelte';
   import { relativeTime, slug } from '../format';
+  import { formatNumber, t, tn, tpn } from '../i18n/i18n.svelte';
   import { anyText, host, mqttTopic, port } from '../parsers';
   import type { LastCommand } from '../ipc';
   import Field from '../components/Field.svelte';
@@ -36,13 +37,13 @@
   const broker = $derived.by(() => {
     switch (s.mqtt.state) {
       case 'connected':
-        return { tone: 'ok', text: `Connected to ${m.broker_host}:${m.broker_port}` };
+        return { tone: 'ok', text: t('mqtt.connectedTo', { address: `${m.broker_host}:${m.broker_port}` }) };
       case 'connecting':
-        return { tone: 'warn', text: `Connecting to ${m.broker_host}:${m.broker_port}…` };
+        return { tone: 'warn', text: t('mqtt.connectingTo', { address: `${m.broker_host}:${m.broker_port}` }) };
       case 'error':
-        return { tone: 'err', text: 'Error' };
+        return { tone: 'err', text: t('status.error') };
       default:
-        return { tone: '', text: 'Off' };
+        return { tone: '', text: t('status.off') };
     }
   });
 
@@ -51,26 +52,27 @@
     s.mqtt_enabled === m.enabled
       ? ''
       : s.mqtt_enabled
-        ? 'Turned on for this session from the console. The project still has MQTT off.'
-        : 'Turned off for this session from the console. The project still has MQTT on.',
+        ? t('mqtt.sessionOn')
+        : t('mqtt.sessionOff'),
   );
 
   function describeCommand(c: LastCommand): string {
     switch (c.kind) {
       case 'transpose':
-        return `Transpose = ${c.value}`;
+        return t('mqtt.cmd.transpose', { value: formatNumber(c.value) });
       case 'transpose_up':
-        return 'Transpose up';
+        return t('mqtt.cmd.transposeUp');
       case 'transpose_down':
-        return 'Transpose down';
+        return t('mqtt.cmd.transposeDown');
       case 'osc_sending':
-        return `OSC sending ${c.on ? 'on' : 'off'}`;
+        return c.on ? t('mqtt.cmd.oscSendingOn') : t('mqtt.cmd.oscSendingOff');
       case 'send_original':
-        return c.on ? 'Send original notes' : 'Send transposed notes';
+        return c.on ? t('mqtt.cmd.sendOriginal') : t('mqtt.cmd.sendTransposed');
       case 'debug':
-        return `Debug ${c.on ? 'on' : 'off'}`;
+        return c.on ? t('mqtt.cmd.debugOn') : t('mqtt.cmd.debugOff');
       case 'custom':
-        return `${c.name} = ${c.value}`;
+        // The payload is shown as received ("1", "0.35"): it is what the client sent.
+        return t('mqtt.cmd.custom', { name: c.name, value: c.value });
     }
   }
 
@@ -80,22 +82,22 @@
   const topics = $derived.by(() => {
     const b = m.base_topic || 'midi_transposer';
     const rows: { what: string; command: string; state: string }[] = [
-      { what: 'Transpose', command: `${b}/transpose`, state: `${b}/state/transpose` },
-      { what: 'Transpose up', command: `${b}/transposeUp`, state: `${b}/state/transpose` },
-      { what: 'Transpose down', command: `${b}/transposeDown`, state: `${b}/state/transpose` },
-      { what: 'OSC sending', command: `${b}/osc/sendingEnabled`, state: `${b}/state/osc/sendingEnabled` },
-      { what: 'Send original notes', command: `${b}/osc/sendOriginal`, state: `${b}/state/osc/sendOriginal` },
-      { what: 'Debug', command: `${b}/debug/enabled`, state: `${b}/state/debug/enabled` },
+      { what: t('mqtt.rowTranspose'), command: `${b}/transpose`, state: `${b}/state/transpose` },
+      { what: t('mqtt.rowTransposeUp'), command: `${b}/transposeUp`, state: `${b}/state/transpose` },
+      { what: t('mqtt.rowTransposeDown'), command: `${b}/transposeDown`, state: `${b}/state/transpose` },
+      { what: t('mqtt.rowOscSending'), command: `${b}/osc/sendingEnabled`, state: `${b}/state/osc/sendingEnabled` },
+      { what: t('mqtt.rowSendOriginal'), command: `${b}/osc/sendOriginal`, state: `${b}/state/osc/sendOriginal` },
+      { what: t('mqtt.rowDebug'), command: `${b}/debug/enabled`, state: `${b}/state/debug/enabled` },
     ];
     for (const c of app.project.osc.sending_addresses) {
       const id = slug(c.name);
       rows.push({
-        what: c.name || 'Unnamed control',
+        what: c.name || t('common.unnamedControl'),
         command: `${b}/osc/custom/${id}/set`,
         state: `${b}/state/osc/custom/${id}`,
       });
     }
-    rows.push({ what: 'Availability', command: '', state: `${b}/availability` });
+    rows.push({ what: t('mqtt.rowAvailability'), command: '', state: `${b}/availability` });
     return rows;
   });
 </script>
@@ -103,18 +105,18 @@
 <div class="view">
   <header class="view-head">
     <h1>MQTT</h1>
-    <p>Control the transposer from Home Assistant or any MQTT client. Entities are announced automatically.</p>
+    <p>{t('mqtt.intro')}</p>
   </header>
 
   <div class="duo">
     <section class="card" aria-labelledby="mqtt-conn-title">
       <div class="card-head">
-        <h2 class="card-title" id="mqtt-conn-title">Broker</h2>
+        <h2 class="card-title" id="mqtt-conn-title">{t('mqtt.broker')}</h2>
       </div>
 
       <Switch
-        label="Connect to an MQTT broker"
-        hint="Saved with the project and applied when it opens."
+        label={t('mqtt.connect')}
+        hint={t('mqtt.connectHint')}
         checked={m.enabled}
         onchange={(on) => {
           m.enabled = on;
@@ -126,7 +128,7 @@
 
       <div class="pair">
         <Field
-          label="Broker host"
+          label={t('mqtt.brokerHost')}
           value={m.broker_host}
           parse={host}
           oncommit={(v) => ((m.broker_host = v), touch())}
@@ -135,7 +137,7 @@
           required
         />
         <Field
-          label="Port"
+          label={t('common.port')}
           value={m.broker_port}
           parse={port}
           oncommit={(v) => ((m.broker_port = v), touch())}
@@ -146,8 +148,8 @@
       </div>
 
       <Field
-        label="Base topic"
-        hint="Prefix of every topic this app uses."
+        label={t('mqtt.baseTopic')}
+        hint={t('mqtt.baseTopicHint')}
         value={m.base_topic}
         parse={mqttTopic}
         oncommit={(v) => ((m.base_topic = v), touch())}
@@ -158,17 +160,17 @@
 
       <div class="halves">
         <Field
-          label="Username"
+          label={t('mqtt.username')}
           value={m.username}
           parse={anyText}
           oncommit={(v) => ((m.username = v), touch())}
           ondone={done}
           autocomplete="username"
-          placeholder="None"
+          placeholder={t('common.none')}
         />
 
         <div class="field">
-          <label class="label" for="mqtt-password">Password</label>
+          <label class="label" for="mqtt-password">{t('mqtt.password')}</label>
           <!-- The password is handed over when focus leaves the field and its Show button. -->
           <div
             class="secret"
@@ -184,7 +186,7 @@
               autocomplete="current-password"
               autocapitalize="none"
               spellcheck="false"
-              placeholder={m.password_set ? 'Type to replace' : 'None'}
+              placeholder={m.password_set ? t('mqtt.passwordReplace') : t('common.none')}
               aria-describedby="mqtt-password-note"
               bind:value={password}
               onkeydown={(e) => {
@@ -194,7 +196,7 @@
             <button
               type="button"
               class={['btn btn-ghost btn-icon', reveal && 'pressed']}
-              aria-label="Show password"
+              aria-label={t('mqtt.showPassword')}
               aria-pressed={reveal}
               disabled={password === ''}
               onpointerdown={(e) => e.preventDefault()}
@@ -208,43 +210,40 @@
 
       <p class="hint note" id="mqtt-password-note">
         {#if m.password_set}
-          <span class="set"><Icon name="check" size={14} /> Password is set.</span>
-          It is stored on this computer and never shown or exported.
-          <button type="button" class="link" onclick={clearPassword}>Clear password</button>
+          <span class="set"><Icon name="check" size={14} /> {t('mqtt.passwordSet')}</span>
+          {t('mqtt.passwordSetNote')}
+          <button type="button" class="link" onclick={clearPassword}>{t('mqtt.clearPassword')}</button>
         {:else}
-          No password is set. A password you enter is stored on this computer and never shown or exported.
+          {t('mqtt.passwordNone')}
         {/if}
       </p>
     </section>
 
     <section class="card" aria-labelledby="mqtt-status-title">
       <div class="card-head">
-        <h2 class="card-title" id="mqtt-status-title">Status</h2>
+        <h2 class="card-title" id="mqtt-status-title">{t('common.status')}</h2>
       </div>
 
       <dl class="status">
-        <dt>Broker</dt>
+        <dt>{t('mqtt.broker')}</dt>
         <dd>
           <span class="line"><span class={['dot', broker.tone]}></span><span>{broker.text}</span></span>
           {#if s.mqtt.state === 'error' && s.mqtt.detail}<span class="detail err">{s.mqtt.detail}</span>{/if}
           {#if sessionNote}<span class="detail">{sessionNote}</span>{/if}
         </dd>
 
-        <dt>Discovery</dt>
+        <dt>{t('mqtt.discovery')}</dt>
         <dd>
-          <span class="line num">
-            {s.mqtt.entities}
-            {s.mqtt.entities === 1 ? 'entity' : 'entities'} published
-          </span>
+          <span class="line num">{tn('mqtt.entities', s.mqtt.entities)}</span>
         </dd>
 
-        <dt>Last command</dt>
+        <dt>{t('mqtt.lastCommand')}</dt>
         <dd>
           {#if s.mqtt.last_command}
             <span class="line mono selectable">{describeCommand(s.mqtt.last_command)}</span>
             <span class="detail num">{relativeTime(s.mqtt.last_command_ts, app.now)}</span>
           {:else}
-            <span class="line">None received yet</span>
+            <span class="line">{t('mqtt.noCommand')}</span>
           {/if}
         </dd>
       </dl>
@@ -253,7 +252,7 @@
 
   <section class="card" aria-labelledby="mqtt-topics-title">
     <div class="card-head">
-      <h2 class="card-title" id="mqtt-topics-title">Topic reference</h2>
+      <h2 class="card-title" id="mqtt-topics-title">{t('mqtt.topicReference')}</h2>
       <button
         type="button"
         class="btn btn-ghost"
@@ -261,7 +260,7 @@
         aria-controls="mqtt-topics"
         onclick={() => (showTopics = !showTopics)}
       >
-        {showTopics ? 'Hide topics' : 'Show topics'}
+        {showTopics ? t('mqtt.hideTopics') : t('mqtt.showTopics')}
         <span class={['chev', showTopics && 'up']}><Icon name="chevron" size={16} /></span>
       </button>
     </div>
@@ -270,31 +269,28 @@
       <table class="table topics" aria-labelledby="mqtt-topics-title">
         <thead>
           <tr>
-            <th scope="col" class="col-what">Control</th>
-            <th scope="col">Command topic (send to)</th>
-            <th scope="col">State topic (read from)</th>
+            <th scope="col" class="col-what">{t('mqtt.colControl')}</th>
+            <th scope="col">{t('mqtt.colCommand')}</th>
+            <th scope="col">{t('mqtt.colState')}</th>
           </tr>
         </thead>
         <tbody>
-          {#each topics as t (t.what + t.command)}
+          {#each topics as row (row.what + row.command)}
             <tr>
-              <th scope="row">{t.what}</th>
-              <td class="mono selectable">{t.command || '–'}</td>
-              <td class="mono selectable">{t.state}</td>
+              <th scope="row">{row.what}</th>
+              <td class="mono selectable">{row.command || '–'}</td>
+              <td class="mono selectable">{row.state}</td>
             </tr>
           {/each}
         </tbody>
       </table>
-      <p class="hint">
-        Send 1, true or on to switch something on; anything else switches it off. Transpose takes a number. State
-        topics are retained.
-      </p>
+      <p class="hint">{t('mqtt.topicsHint')}</p>
     </div>
     {#if !showTopics}
       <p class="hint">
-        Command and state topics for the base topic <span class="mono">{m.base_topic}</span> and your
-        {app.project.osc.sending_addresses.length} custom
-        {app.project.osc.sending_addresses.length === 1 ? 'control' : 'controls'}.
+        {#each tpn('mqtt.topicsSummary', app.project.osc.sending_addresses.length, { topic: m.base_topic }) as part, i (i)}{#if part.param === 'topic'}<span
+              class="mono">{part.text}</span
+            >{:else}{part.text}{/if}{/each}
       </p>
     {/if}
   </section>

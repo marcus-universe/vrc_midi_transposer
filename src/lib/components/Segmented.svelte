@@ -56,7 +56,8 @@
   .track {
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: 1fr;
+    /* Equal columns that may shrink below their label: long labels wrap instead of overflowing. */
+    grid-auto-columns: minmax(0, 1fr);
     gap: 2px;
     padding: 2px;
     border: 1px solid var(--line-strong);
@@ -67,6 +68,7 @@
   .opt {
     position: relative;
     display: flex;
+    min-inline-size: 0;
     cursor: pointer;
   }
 
@@ -86,13 +88,18 @@
     flex: 1;
     align-items: center;
     justify-content: center;
+    min-inline-size: 0;
     min-block-size: 28px;
-    padding: 0 var(--sp-3);
+    padding: 2px var(--sp-3);
     border-radius: 6px;
     color: var(--text-dim);
     font-size: var(--fs-sm);
     font-weight: 500;
-    white-space: nowrap;
+    line-height: 1.25;
+    text-align: center;
+    /* Long labels (ru, de) wrap inside their segment instead of overflowing the card. */
+    overflow-wrap: anywhere;
+    hyphens: auto;
     transition:
       background-color var(--dur) var(--ease),
       color var(--dur) var(--ease);
@@ -100,7 +107,7 @@
 
   .small span {
     min-block-size: 22px;
-    padding: 0 var(--sp-2);
+    padding: 1px var(--sp-2);
   }
 
   .opt:hover span {

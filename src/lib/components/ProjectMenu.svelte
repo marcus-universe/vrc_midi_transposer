@@ -4,6 +4,9 @@
   // exists and a plain positioned element with the same behaviour where not.
   import { tick } from 'svelte';
   import { app } from '../app.svelte';
+  import { shortPath } from '../format';
+  import { t } from '../i18n/i18n.svelte';
+  import type { RecentFile } from '../ipc';
   import Icon from './Icon.svelte';
 
   const hasPopover = 'popover' in HTMLElement.prototype;
@@ -119,6 +122,29 @@
     action();
   }
 
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  /** Shortcut as shown in the menu; the item's aria-keyshortcuts says it to screen readers. */
+  const keys = (key: string, shift = false) => (isMac ? `${shift ? '⇧' : ''}⌘${key}` : `Ctrl+${shift ? 'Shift+' : ''}${key}`);
+
+  function openRecent(e: MouseEvent, r: RecentFile) {
+    if (!r.exists) return;
+    run(e, () => app.openFile(r.path, r.name));
+  }
+
+  /** Removes an entry and keeps focus in the list (on the entry that took its place). */
+  async function removeRecent(r: RecentFile, i: number) {
+    if (!(await app.removeRecent(r.path))) return;
+    await tick();
+    const left = group ? [...group.querySelectorAll<HTMLElement>('.recent')] : [];
+    (left[Math.min(i, left.length - 1)] ?? items()[0])?.focus({ preventScroll: true });
+  }
+
+  function onRecentKey(e: KeyboardEvent, r: RecentFile, i: number) {
+    if (e.key !== 'Delete') return;
+    e.preventDefault();
+    void removeRecent(r, i);
+  }
+
   // Without the Popover API: light dismiss by hand.
   $effect(() => {
     if (hasPopover || !open) return;
@@ -151,12 +177,15 @@
     onpointerdown={() => (openAtPress = open)}
     onclick={onTriggerClick}
     onkeydown={onTriggerKey}
+    title={app.path ?? t('project.notSaved')}
+    aria-describedby="{uid}-file"
   >
-    <span class="name">{app.project.name || 'Untitled project'}</span>
+    <span class="name">{app.project.name || t('project.untitled')}</span>
     <span class={['unsaved', app.dirty && 'on']} aria-hidden="true"></span>
-    {#if app.dirty}<span class="visually-hidden">, unsaved changes</span>{/if}
+    {#if app.dirty}<span class="visually-hidden">{t('project.unsavedSuffix')}</span>{/if}
     <Icon name="chevron" size={16} />
   </button>
+  <span class="visually-hidden" id="{uid}-file">{app.path ?? t('project.notSaved')}</span>
 
   <div
     bind:this={menu}
@@ -175,47 +204,88 @@
       onkeydown={onMenuKey}
       onpointermove={onPointerMove}
     >
-      <div role="group" aria-label="Open project">
-        <span class="heading" aria-hidden="true">Projects</span>
-        {#each app.projects as p (p.id)}
-          <button
-            type="button"
-            role="menuitemradio"
-            aria-checked={p.id === app.project.id}
-            onclick={(e) => run(e, () => app.openProject(p.id))}
-          >
-            <span class="lead">{#if p.id === app.project.id}<Icon name="check" size={16} />{/if}</span>
-            <span class="text">{p.id === app.project.id ? app.project.name || p.name : p.name}</span>
-          </button>
-        {/each}
-      </div>
-      <hr />
-      <button type="button" role={itemRole} onclick={(e) => run(e, () => app.askNewProject())}>
+      <button type="button" role={itemRole} disabled={app.busy} onclick={(e) => run(e, () => app.newProject())}>
         <span class="lead"><Icon name="plus" size={16} /></span>
-        <span class="text">New project…</span>
+        <span class="text">{t('project.new')}</span>
       </button>
-      <button type="button" role={itemRole} onclick={(e) => run(e, () => app.askDuplicateProject())}>
-        <span class="lead"><Icon name="copy" size={16} /></span>
-        <span class="text">Duplicate…</span>
-      </button>
-      <button type="button" role={itemRole} onclick={(e) => run(e, () => app.importProject())}>
-        <span class="lead"><Icon name="folder" size={16} /></span>
-        <span class="text">Import…</span>
-      </button>
-      <button type="button" role={itemRole} onclick={(e) => run(e, () => void app.exportProject())}>
-        <span class="lead"><Icon name="external" size={16} /></span>
-        <span class="text">Export…</span>
-      </button>
-      <hr />
       <button
         type="button"
-        class="danger"
         role={itemRole}
-        onclick={(e) => run(e, () => (app.dialog = { kind: 'delete' }))}
+        disabled={app.busy}
+        aria-keyshortcuts="Control+O"
+        aria-describedby="{uid}-open-hint"
+        onclick={(e) => run(e, () => app.openDialog())}
       >
-        <span class="lead"><Icon name="trash" size={16} /></span>
-        <span class="text">Delete project…</span>
+        <span class="lead"><Icon name="folder" size={16} /></span>
+        <span class="text two">
+          <span class="line">{t('project.open')}</span>
+          <span class="sub wrap" id="{uid}-open-hint">{t('project.openHint')}</span>
+        </span>
+        <span class="kbd" aria-hidden="true">{keys('O')}</span>
       </button>
+      <button
+        type="button"
+        role={itemRole}
+        disabled={app.busy}
+        aria-keyshortcuts="Control+S"
+        onclick={(e) => run(e, () => void app.save())}
+      >
+        <span class="lead"><Icon name="save" size={16} /></span>
+        <span class="text">{t('project.save')}</span>
+        <span class="kbd" aria-hidden="true">{keys('S')}</span>
+      </button>
+      <button
+        type="button"
+        role={itemRole}
+        disabled={app.busy}
+        aria-keyshortcuts="Control+Shift+S"
+        onclick={(e) => run(e, () => void app.saveAs())}
+      >
+        <span class="lead"></span>
+        <span class="text">{t('project.saveAs')}</span>
+        <span class="kbd" aria-hidden="true">{keys('S', true)}</span>
+      </button>
+      <hr />
+      <div role="group" aria-label={t('project.recent')}>
+        <span class="heading" aria-hidden="true">{t('project.recent')}</span>
+        {#each app.recent as r, i (r.path)}
+          {@const current = r.path === app.path}
+          <div class="recent-row" role="none">
+            <button
+              type="button"
+              class={['recent', !r.exists && 'missing']}
+              role={itemRole}
+              disabled={app.busy}
+              aria-disabled={!r.exists}
+              title={r.path}
+              onclick={(e) => openRecent(e, r)}
+              onkeydown={(e) => onRecentKey(e, r, i)}
+            >
+              <span class="lead">{#if current}<Icon name="check" size={16} />{/if}</span>
+              <span class="text two">
+                <span class="line">{r.name}</span>
+                <span class="sub">
+                  {#if !r.exists}<span class="lost"><Icon name="alert" size={12} />{t('project.notFound')}</span
+                    >{' · '}{/if}{shortPath(r.path)}
+                </span>
+              </span>
+              {#if current}<span class="visually-hidden">, {t('project.currentFile')}</span>{/if}
+            </button>
+            <button
+              type="button"
+              class="remove"
+              role={itemRole}
+              aria-label={t('project.removeRecent', { name: r.name })}
+              title={t('project.removeRecent', { name: r.name })}
+              onclick={() => void removeRecent(r, i)}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        {:else}
+          <p class="none">{t('project.recentEmpty')}</p>
+        {/each}
+      </div>
     </div>
   </div>
 </div>
@@ -281,7 +351,7 @@
     position: fixed;
     inset: auto;
     z-index: 30;
-    inline-size: 264px;
+    inline-size: min(340px, calc(100vw - 16px));
     margin: 0;
     padding: 0;
     border: 1px solid var(--line);
@@ -358,23 +428,96 @@
     color: var(--text-dim);
   }
 
-  [aria-checked='true'] .lead {
-    color: var(--accent-text);
-  }
-
-  [aria-checked='true'] .text {
-    font-weight: 600;
-  }
-
   .text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .items button.danger,
-  .items button.danger .lead {
-    color: var(--err);
+  .items button:disabled {
+    color: var(--text-faint);
+    cursor: default;
+  }
+
+  .text.two {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 1px;
+    min-inline-size: 0;
+    padding-block: 5px;
+    white-space: normal;
+  }
+
+  .line,
+  .sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sub {
+    color: var(--text-dim);
+    font-size: var(--fs-xs);
+  }
+
+  .sub.wrap {
+    white-space: normal;
+  }
+
+  .kbd {
+    flex: none;
+    margin-inline-start: auto;
+    padding-inline-start: var(--sp-3);
+    color: var(--text-dim);
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .recent-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .recent {
+    flex: 1;
+    min-inline-size: 0;
+  }
+
+  /* Looks unavailable, but stays focusable so its remove button and its state can be reached. */
+  .items button.missing {
+    cursor: default;
+  }
+
+  .missing .line {
+    color: var(--text-dim);
+  }
+
+  .lost {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--warn);
+  }
+
+  .items button.remove {
+    flex: none;
+    justify-content: center;
+    inline-size: 32px;
+    padding: 0;
+    color: var(--text-dim);
+  }
+
+  .items button.remove:hover,
+  .items button.remove:focus {
+    color: var(--text);
+  }
+
+  .none {
+    padding: var(--sp-1) var(--sp-2) var(--sp-2);
+    color: var(--text-dim);
+    font-size: var(--fs-sm);
   }
 
   hr {

@@ -2,17 +2,22 @@
   // Slim icon rail. Each button is named by aria-label; the tooltip repeats
   // that name for sighted users on hover and keyboard focus.
   import { app, type View } from '../app.svelte';
+  import { t } from '../i18n/i18n.svelte';
   import Icon, { type IconName } from './Icon.svelte';
 
-  const items: { view: View; label: string; icon: IconName }[] = [
-    { view: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
-    { view: 'osc', label: 'OSC', icon: 'osc' },
-    { view: 'mqtt', label: 'MQTT', icon: 'mqtt' },
-    { view: 'settings', label: 'Settings', icon: 'settings' },
+  const items: { view: View; label: () => string; icon: IconName }[] = [
+    { view: 'dashboard', label: () => t('rail.dashboard'), icon: 'dashboard' },
+    { view: 'osc', label: () => 'OSC', icon: 'osc' },
+    { view: 'mqtt', label: () => 'MQTT', icon: 'mqtt' },
+    {
+      view: 'settings',
+      label: () => (app.updateAvailable ? t('rail.settingsUpdate') : t('rail.settings')),
+      icon: 'settings',
+    },
   ];
 </script>
 
-<nav class="rail" aria-label="Views">
+<nav class="rail" aria-label={t('rail.views')}>
   <div class="logo" aria-hidden="true">
     <Icon name="piano" size={20} />
   </div>
@@ -22,12 +27,13 @@
         <button
           type="button"
           class="item"
-          aria-label={item.label}
+          aria-label={item.label()}
           aria-current={app.ui.view === item.view ? 'page' : undefined}
-          data-tip={item.label}
+          data-tip={item.label()}
           onclick={() => app.setView(item.view)}
         >
           <Icon name={item.icon} size={20} />
+          {#if item.view === 'settings' && app.updateAvailable}<span class="badge-dot" aria-hidden="true"></span>{/if}
         </button>
       </li>
     {/each}
@@ -35,9 +41,9 @@
   <button
     type="button"
     class="item"
-    aria-label="About"
+    aria-label={t('rail.about')}
     aria-haspopup="dialog"
-    data-tip="About"
+    data-tip={t('rail.about')}
     onclick={() => (app.dialog = { kind: 'about' })}
   >
     <Icon name="info" size={20} />
@@ -118,6 +124,24 @@
     inline-size: 3px;
     border-radius: 0 3px 3px 0;
     background: var(--accent-text);
+  }
+
+  .badge-dot {
+    position: absolute;
+    inset-block-start: 7px;
+    inset-inline-end: 7px;
+    inline-size: 9px;
+    block-size: 9px;
+    border: 2px solid var(--surface-1);
+    border-radius: 50%;
+    background: var(--accent-text);
+  }
+
+  @media (forced-colors: active) {
+    .badge-dot {
+      forced-color-adjust: none;
+      background: CanvasText;
+    }
   }
 
   .item::after {

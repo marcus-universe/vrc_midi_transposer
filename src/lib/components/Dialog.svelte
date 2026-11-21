@@ -22,15 +22,27 @@
 
   const uid = $props.id();
   let el = $state<HTMLDialogElement>();
+  /** Closed because `open` turned false: another dialog took over, nobody answered this one. */
+  let closedByProp = false;
 
   $effect(() => {
     if (!el) return;
-    if (open && !el.open) el.showModal();
-    else if (!open && el.open) el.close();
+    if (open && !el.open) {
+      el.showModal();
+    } else if (!open && el.open) {
+      closedByProp = true;
+      el.close();
+    }
   });
 
   function closed() {
     if (!el) return;
+    if (closedByProp) {
+      // Not an answer: calling onclose here would close the dialog that replaced this one.
+      closedByProp = false;
+      el.returnValue = '';
+      return;
+    }
     const result = el.returnValue;
     // Esc sets no value and browsers differ on clearing the previous one.
     el.returnValue = '';
@@ -66,6 +78,7 @@
     font-size: var(--fs-lg);
     font-weight: 600;
     line-height: 1.3;
+    text-wrap: balance;
   }
 
   .body {

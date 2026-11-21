@@ -6,6 +6,7 @@
   // re-rendering.
   import { onMount } from 'svelte';
   import { app } from '../app.svelte';
+  import { t } from '../i18n/i18n.svelte';
 
   let pitchEl = $state<HTMLDivElement>();
   let modEl = $state<HTMLDivElement>();
@@ -40,11 +41,11 @@
     class="wheel pitch"
     bind:this={pitchEl}
     role="meter"
-    aria-label="Pitch wheel"
+    aria-label={t('piano.pitchWheel')}
     aria-valuemin={-100}
     aria-valuemax={100}
     aria-valuenow={0}
-    title="Pitch wheel"
+    title={t('piano.pitchWheel')}
   >
     <span class="drum"><span class="surface"></span></span>
   </div>
@@ -52,11 +53,11 @@
     class="wheel mod"
     bind:this={modEl}
     role="meter"
-    aria-label="Mod wheel"
+    aria-label={t('piano.modWheel')}
     aria-valuemin={0}
     aria-valuemax={127}
     aria-valuenow={0}
-    title="Mod wheel"
+    title={t('piano.modWheel')}
   >
     <span class="drum"><span class="surface"></span></span>
   </div>

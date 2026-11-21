@@ -21,6 +21,7 @@
   // Nothing here re-renders per note.
   import { onMount } from 'svelte';
   import { app } from '../app.svelte';
+  import { t } from '../i18n/i18n.svelte';
   import Segmented from './Segmented.svelte';
   import Wheels from './Wheels.svelte';
 
@@ -100,35 +101,35 @@
   });
 </script>
 
-<section class="strip" aria-label="Keyboard">
+<section class="strip" aria-label={t('piano.keyboard')}>
   <div class="bar">
-    <span class="title">Keyboard</span>
+    <span class="title">{t('piano.keyboard')}</span>
     <Segmented
       small
-      label="Notes shown on the keyboard"
+      label={t('piano.shownNotes')}
       options={[
-        { value: 'input', label: 'Input' },
-        { value: 'output', label: 'Output' },
+        { value: 'input', label: t('piano.input') },
+        { value: 'output', label: t('piano.output') },
       ]}
       value={app.ui.piano_source}
       onchange={(v) => app.setPianoSource(v)}
     />
     <span class="note">
-      {app.ui.piano_source === 'input' ? 'Keys as played' : 'Keys after transposing'}
+      {app.ui.piano_source === 'input' ? t('piano.asPlayed') : t('piano.afterTranspose')}
     </span>
     <button
       type="button"
       class="btn btn-ghost panic"
-      title="Release every held note on the output and over OSC"
+      title={t('piano.panicTip')}
       onclick={() => app.engine({ type: 'panic' })}
     >
-      Panic
+      {t('piano.panic')}
     </button>
   </div>
 
   <div class="piano">
     <Wheels />
-    <div class="board" role="img" aria-label="Piano with 88 keys. Pressed keys are highlighted; a stronger blue means a harder key press.">
+    <div class="board" role="img" aria-label={t('piano.board')}>
     <span class="edge" bind:this={lowEdge}>‹</span>
     <div class="keys motion-safe" bind:this={root}>
       {#each whites as k (k.note)}

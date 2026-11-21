@@ -5,6 +5,7 @@
   import { onMount } from 'svelte';
   import { app, CONSOLE_MIN_HEIGHT } from '../app.svelte';
   import { clockTime } from '../format';
+  import { t } from '../i18n/i18n.svelte';
   import type { LogLine } from '../ipc';
   import Icon from './Icon.svelte';
   import Switch from './Switch.svelte';
@@ -190,7 +191,7 @@
   }
 </script>
 
-<section class="console" aria-label="Console" style:block-size="{app.ui.console_height}px">
+<section class="console" aria-label={t('console.title')} style:block-size="{app.ui.console_height}px">
   <!-- A focusable separator is a window splitter: an interactive widget. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div
@@ -198,7 +199,7 @@
     role="separator"
     tabindex="0"
     aria-orientation="horizontal"
-    aria-label="Resize console"
+    aria-label={t('console.resize')}
     aria-valuenow={app.ui.console_height}
     aria-valuemin={CONSOLE_MIN_HEIGHT}
     aria-valuemax={maxHeight()}
@@ -207,28 +208,28 @@
   ></div>
 
   <div class="head">
-    <h2>Console</h2>
+    <h2>{t('console.title')}</h2>
     <div class="tools">
       <Switch
         compact
-        label="Debug"
+        label={t('console.debug')}
         checked={app.snapshot.debug}
         onchange={(on) => app.engine({ type: 'set_debug', on })}
       />
-      <button type="button" class="btn btn-ghost small" onclick={() => app.clearLog()}>Clear</button>
+      <button type="button" class="btn btn-ghost small" onclick={() => app.clearLog()}>{t('console.clear')}</button>
       <span class="copy">
         <button type="button" class="btn btn-ghost small" onclick={copyAll}>
           <Icon name={copyState === 'ok' ? 'check' : 'copy'} size={15} />
-          Copy all
+          {t('console.copyAll')}
         </button>
         <span class={['tip', copyState && 'show']} role="status">
-          {copyState === 'ok' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : ''}
+          {copyState === 'ok' ? t('console.copied') : copyState === 'failed' ? t('console.copyFailed') : ''}
         </span>
       </span>
       <button
         type="button"
         class="btn btn-ghost btn-icon small"
-        aria-label="Close console"
+        aria-label={t('console.close')}
         onclick={() => app.toggleConsole(false)}
       >
         <Icon name="close" size={16} />
@@ -241,7 +242,7 @@
     class="log scroller selectable"
     role="log"
     aria-live="off"
-    aria-label="Log output"
+    aria-label={t('console.log')}
     tabindex="0"
     bind:this={scroller}
     onscroll={onScroll}
@@ -251,13 +252,13 @@
   </div>
 
   <form class="prompt" onsubmit={submit}>
-    <label for="console-input" class="visually-hidden">Command</label>
+    <label for="console-input" class="visually-hidden">{t('console.command')}</label>
     <span class="caret" aria-hidden="true">&gt;</span>
     <input
       bind:this={input}
       id="console-input"
       type="text"
-      placeholder="Type a command, for example help"
+      placeholder={t('console.placeholder')}
       autocomplete="off"
       autocapitalize="none"
       spellcheck="false"

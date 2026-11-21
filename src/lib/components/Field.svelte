@@ -4,6 +4,7 @@
   // once the browser considers the field :user-invalid (edited, then left).
   import { untrack } from 'svelte';
   import type { HTMLInputAttributes } from 'svelte/elements';
+  import { t } from '../i18n/i18n.svelte';
   import type { Parser } from '../parsers';
   import Icon from './Icon.svelte';
 
@@ -113,7 +114,7 @@
     onchange={() => ondone?.()}
   />
   <div class="error-msg" id="{uid}-err">
-    <span role="img" aria-label="Error"><Icon name="alert" size={14} /></span>
+    <span role="img" aria-label={t('common.error')}><Icon name="alert" size={14} /></span>
     <span>{error}</span>
   </div>
 </div>

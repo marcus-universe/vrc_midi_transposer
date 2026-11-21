@@ -7,9 +7,34 @@
 //   ?console=1&h=260          console drawer open, with a height
 //   ?close=1                  simulate closing the window with unsaved changes
 //   ?demo=0                   do not play the piano demo
+//   ?update=none|notify|error update mode (default auto, offering 2.1.1); `error` fails the download
+//   ?dialog=cancel            the native Save As and Open dialogs are cancelled
+//   ?pending=1                the system asks to open a file 2 s after start (double-click on a .vrcmt)
+//   ?fresh=1                  start with a new, never saved project
+//
+// From the browser console: `mockOpenFile('C:\\path\\file.vrcmt')` simulates a
+// double-click on a project file while the app runs.
 
-import { clamp, defaultListenAddresses, slug } from './format';
-import type { AppInfo, EngineCmd, Frame, Init, LogLevel, LogLine, MidiStatus, PortInfo, PortRef, Project, ProjectInfo, ProjectState, Snapshot, LastCommand } from './ipc';
+import { clamp, defaultListenAddresses, fileName } from './format';
+import type {
+  AppInfo,
+  EngineCmd,
+  Frame,
+  Init,
+  LastCommand,
+  Learned,
+  LogLevel,
+  LogLine,
+  MidiStatus,
+  MidiTrigger,
+  PortInfo,
+  PortRef,
+  Project,
+  ProjectState,
+  RecentFile,
+  Snapshot,
+  UpdateInfo,
+} from './ipc';
 
 const BANNER = String.raw` _  _  ____   ___
 ╱ )( ╲(  _ ╲ ╱ __)     ▓▓╦▓▓▓╦▓▓▓╦▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
@@ -24,15 +49,31 @@ const BANNER = String.raw` _  _  ____   ___
   )(   )   ╱╱    ╲╱    ╱╲___ ╲ ) __╱(  O )╲___ ╲ ) _)  )   ╱
  (__) (__╲_)╲_╱╲_╱╲_)__)(____╱(__)   ╲__╱ (____╱(____)(__╲_)`;
 
+const params = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
+
+const UPDATE_PARAM = params.get('update');
+
 const APP: AppInfo = {
   name: 'VRC MIDI Transposer',
-  version: '2.0.0',
+  version: '2.1.0',
   owner: 'Marcus Universe',
   email: 'contact@marcus-universe.de',
   license: 'MIT License',
   repository: 'https://github.com/marcus-universe/vrc_midi_transposer',
   data_dir: 'C:\\Users\\you\\AppData\\Roaming\\de.marcus-universe.vrc-midi-transposer',
+  documents_dir: 'C:\\Users\\you\\Documents\\VRC MIDI Transposer',
+  update_mode: UPDATE_PARAM === 'none' ? 'none' : UPDATE_PARAM === 'notify' ? 'notify' : 'auto',
 };
+
+const UPDATE: UpdateInfo = {
+  version: '2.1.1',
+  current: APP.version,
+  date: '2026-11-18T09:30:00Z',
+  notes:
+    'Fixes\n- MIDI Learn ignores Note Off messages.\n- The recent list no longer shows a file twice.\n\nImprovements\n- Faster start with many recent projects.\n<b>Release notes are plain text</b>',
+};
+
+const DOCS = APP.documents_dir;
 
 const INPUTS: PortInfo[] = [
   { id: 'in-0', name: 'Arturia KeyLab 61' },
@@ -47,7 +88,6 @@ const OUTPUTS: PortInfo[] = [
 ];
 
 const UI_KEY = 'vrc-midi-transposer.mock-ui';
-const params = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
 
 function clone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
@@ -89,9 +129,25 @@ function demoProject(): Project {
   p.midi.output = { id: 'out-0', name: 'loopMIDI Port' };
   p.osc.sending_enabled = true;
   p.osc.sending_addresses = [
-    { name: 'Sunglasses Toggle', addr: '/avatar/parameters/Sunglasses', type: 'bool', default: 0, min: null, max: null },
+    {
+      name: 'Sunglasses Toggle',
+      addr: '/avatar/parameters/Sunglasses',
+      type: 'bool',
+      default: 0,
+      min: null,
+      max: null,
+      midi: { kind: 'note', channel: null, number: 36, mode: 'toggle', forward: false },
+    },
     { name: 'Sign Toggle', addr: '/avatar/parameters/Sign', type: 'bool', default: 1, min: null, max: null },
-    { name: 'Hue Shift', addr: '/avatar/parameters/HUE', type: 'float', default: 0.35, min: 0, max: 1 },
+    {
+      name: 'Hue Shift',
+      addr: '/avatar/parameters/HUE',
+      type: 'float',
+      default: 0.35,
+      min: 0,
+      max: 1,
+      midi: { kind: 'cc', channel: 1, number: 20, mode: 'toggle', forward: false },
+    },
   ];
   p.mqtt.enabled = true;
   p.mqtt.broker_host = '192.168.1.20';
@@ -104,10 +160,19 @@ function demoProject(): Project {
 // State
 // ---------------------------------------------------------------------------
 
-/** Saved files, by project id. */
-const saved = new Map<string, { project: Project; modified: number }>();
+/** Project files on the pretend disk, by path. */
+const files = new Map<string, Project>();
+/** Recently used files, newest first. Some may be missing from `files`. */
+let recentPaths: string[] = [];
 let working: Project;
-const secrets = new Map<string, string>();
+/** The last saved version of the working copy (the default project while it has no file). */
+let baseline: Project;
+let workingPath: string | null = null;
+/** The MQTT password lives on the computer, never in a file. */
+let secret = '';
+/** A file the system asked to open that the UI has not taken yet. */
+let pendingOpen: string | null = null;
+let seeded = false;
 
 const session = {
   transpose: 0,
@@ -119,6 +184,8 @@ const session = {
   custom_values: [] as number[],
   last_command: null as LastCommand | null,
   last_command_ts: 0,
+  learning: null as number | null,
+  learned: null as Learned | null,
 };
 
 let logs: LogLine[] = [];
@@ -131,18 +198,33 @@ let pending: Frame | null = null;
 let frameTimer: ReturnType<typeof setTimeout> | undefined;
 let demoTimer: ReturnType<typeof setInterval> | undefined;
 let mqttTimer: ReturnType<typeof setTimeout> | undefined;
+let learnTimer: ReturnType<typeof setTimeout> | undefined;
 let nextId = 1;
 
+const STAGE_PATH = `${DOCS}\\Stage piano.vrcmt`;
+const PRACTICE_PATH = 'C:\\Users\\you\\Music\\VRChat sets\\2026\\Practice room.vrcmt';
+const MISSING_PATH = 'D:\\Backup\\Old laptop\\Live set.vrcmt';
+
 function seed() {
+  seeded = true;
   const stage = demoProject();
   const practice = makeProject('p-practice', 'Practice room');
   practice.midi.input = { id: 'in-0', name: 'Arturia KeyLab 61' };
   practice.midi.output = { id: 'out-1', name: 'Microsoft GS Wavetable Synth' };
+  files.set(STAGE_PATH, clone(stage));
+  files.set(PRACTICE_PATH, clone(practice));
+  recentPaths = [STAGE_PATH, PRACTICE_PATH, MISSING_PATH];
+  secret = 'hunter2';
   const now = Date.now();
-  saved.set(stage.id, { project: clone(stage), modified: now - 3 * 3600_000 });
-  saved.set(practice.id, { project: clone(practice), modified: now - 26 * 3600_000 });
-  secrets.set(stage.id, 'hunter2');
-  working = clone(stage);
+  if (params.get('fresh') === '1') {
+    working = makeProject(`p-${nextId++}`, 'Untitled');
+    baseline = clone(working);
+    workingPath = null;
+  } else {
+    working = clone(stage);
+    baseline = clone(stage);
+    workingPath = STAGE_PATH;
+  }
   applyOpenValues();
   session.transpose = 3;
   session.mqtt_connected = true;
@@ -296,6 +378,8 @@ function snapshot(): Snapshot {
       last_command: session.last_command,
       last_command_ts: session.last_command_ts,
     },
+    learning: session.learning,
+    learned: session.learned ? clone(session.learned) : null,
   };
 }
 
@@ -303,29 +387,53 @@ function snapshot(): Snapshot {
 // Projects
 // ---------------------------------------------------------------------------
 
+/** Like the shell: ids do not count, a missing trigger and a null one are the same. */
 function comparable(p: Project): string {
-  return JSON.stringify({ ...p, mqtt: { ...p.mqtt, password: '' } });
+  return JSON.stringify({
+    ...p,
+    id: '',
+    mqtt: { ...p.mqtt, password: '' },
+    osc: { ...p.osc, sending_addresses: p.osc.sending_addresses.map((c) => ({ ...c, midi: c.midi ?? null })) },
+  });
 }
 
-function projectList(): ProjectInfo[] {
-  return [...saved.values()]
-    .map(({ project, modified }) => ({ id: project.id, name: project.name, modified }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+function recentList(): RecentFile[] {
+  return recentPaths.map((path) => {
+    const file = files.get(path);
+    return { path, name: file?.name ?? fileName(path).replace(/\.vrcmt$/i, ''), exists: !!file };
+  });
+}
+
+function remember(path: string) {
+  recentPaths = [path, ...recentPaths.filter((p) => p !== path)].slice(0, 10);
 }
 
 function state(): ProjectState {
-  const file = saved.get(working.id);
   const out = clone(working);
   out.mqtt.password = '';
   return {
     project: out,
-    dirty: !file || comparable(file.project) !== comparable(working),
-    projects: projectList(),
+    dirty: comparable(baseline) !== comparable(working),
+    path: workingPath,
+    recent: recentList(),
   };
 }
 
-function open(project: Project) {
+function writeFile(path: string) {
+  files.set(path, clone(working));
+  baseline = clone(working);
+  workingPath = path;
+  remember(path);
+  log('success', `Project saved to ${path}`);
+}
+
+function open(project: Project, path: string | null) {
   working = clone(project);
+  // A file opens clean; an imported config.json or a new project starts from the default.
+  baseline = path ? clone(project) : makeProject(project.id, 'Untitled');
+  workingPath = path;
+  if (path) remember(path);
+  session.learning = null;
   applyOpenValues();
   connectMqttSoon();
   log('info', `Project "${working.name}" loaded`);
@@ -347,12 +455,14 @@ function updateProject(next: Project): ProjectState {
   const before = working;
   const incoming = clone(next);
   if (incoming.mqtt.password !== '') {
-    secrets.set(incoming.id, incoming.mqtt.password);
+    secret = incoming.mqtt.password;
     incoming.mqtt.password_set = true;
   } else if (!incoming.mqtt.password_set) {
-    secrets.delete(incoming.id);
+    secret = '';
   }
   incoming.mqtt.password = '';
+  // The shell skips a missing trigger and accepts null; store both as absent.
+  for (const c of incoming.osc.sending_addresses) if (c.midi == null) delete c.midi;
   working = incoming;
 
   session.transpose = clamp(session.transpose, working.transpose.min, working.transpose.max);
@@ -422,7 +532,55 @@ function engine(cmd: EngineCmd) {
       log('warn', 'Panic: all notes released');
       pushKeys();
       break;
+    case 'midi_learn':
+      clearTimeout(learnTimer);
+      if (cmd.index === null || !working.osc.sending_addresses[cmd.index]) {
+        if (session.learning !== null) log('info', 'MIDI Learn cancelled');
+        session.learning = null;
+        break;
+      }
+      session.learning = cmd.index;
+      log('info', `MIDI Learn: waiting for a message for "${working.osc.sending_addresses[cmd.index].name}"`);
+      // Pretend the user touches the keyboard after a moment.
+      learnTimer = setTimeout(() => {
+        const index = session.learning;
+        if (index === null) return;
+        const trigger = learnedTrigger(index);
+        session.learning = null;
+        session.learned = { seq: (session.learned?.seq ?? 0) + 1, index, trigger };
+        log('success', `MIDI Learn: ${trigger.kind} ${trigger.number} on channel ${trigger.channel ?? 'any'}`);
+        pushSnapshot();
+      }, 1500);
+      break;
   }
+  pushSnapshot();
+}
+
+/** What "the user played" during MIDI Learn: a different message per control. */
+function learnedTrigger(index: number): MidiTrigger {
+  switch (index % 3) {
+    case 0:
+      return { kind: 'note', channel: 1, number: 48 + index, mode: 'toggle', forward: false };
+    case 1:
+      return { kind: 'cc', channel: 2, number: 21 + index, mode: 'toggle', forward: false };
+    default:
+      return { kind: 'program', channel: 1, number: 4 + index, mode: 'toggle', forward: false };
+  }
+}
+
+/** Now and then a control with a trigger reacts, as if its key or knob was used. */
+function triggerTick() {
+  const controls = working.osc.sending_addresses;
+  const withTrigger = controls.map((c, i) => [c, i] as const).filter(([c]) => c.midi);
+  if (!withTrigger.length) return;
+  const [c, i] = withTrigger[Math.floor(Math.random() * withTrigger.length)];
+  if (c.type === 'bool') session.custom_values[i] = session.custom_values[i] >= 0.5 ? 0 : 1;
+  else {
+    const min = c.min ?? 0;
+    const max = c.max ?? 1;
+    session.custom_values[i] = Number((min + Math.random() * (max - min)).toFixed(2));
+  }
+  if (session.debug) log('debug', `MIDI trigger ${c.name}: ${session.custom_values[i]}`);
   pushSnapshot();
 }
 
@@ -515,6 +673,7 @@ function demoTick() {
   if (!visible) return;
   const next = new Set(DEMO_STEPS[demoStep % DEMO_STEPS.length]);
   demoStep++;
+  if (demoStep % 4 === 0) triggerTick();
   for (const n of inputNotes) {
     if (!next.has(n)) {
       inputNotes.delete(n);
@@ -568,8 +727,42 @@ function loadUi(): Record<string, unknown> {
   return ui;
 }
 
+/** Simulates a double-click on a project file while the app runs. */
+function systemOpen(path: string) {
+  pendingOpen = path;
+  queue({ open_pending: true });
+}
+
+if (typeof window !== 'undefined') {
+  (window as unknown as { mockOpenFile: (path: string) => void }).mockOpenFile = systemOpen;
+}
+
+let updateTimer: ReturnType<typeof setInterval> | undefined;
+
+/** Fake download: 18 MB in about three seconds, then "installing". */
+function fakeInstall() {
+  const total = 18_400_000;
+  let downloaded = 0;
+  clearInterval(updateTimer);
+  queue({ update: { state: 'downloading', downloaded, total: null } });
+  updateTimer = setInterval(() => {
+    downloaded = Math.min(total, downloaded + 1_150_000);
+    if (UPDATE_PARAM === 'error' && downloaded > total / 2) {
+      clearInterval(updateTimer);
+      queue({ update: { state: 'error', detail: 'Download failed: connection reset by peer' } });
+      return;
+    }
+    queue({ update: { state: 'downloading', downloaded, total } });
+    if (downloaded >= total) {
+      clearInterval(updateTimer);
+      queue({ update: { state: 'installing' } });
+      log('warn', 'Installing update 2.1.1. In the app it would restart now (browser mock).');
+    }
+  }, 200);
+}
+
 export async function mockSubscribe(onFrame: (frame: Frame) => void): Promise<Init> {
-  if (!saved.size) seed();
+  if (!seeded) seed();
   listener = onFrame;
   pending = null;
 
@@ -587,6 +780,9 @@ export async function mockSubscribe(onFrame: (frame: Frame) => void): Promise<In
   if (params.get('close') === '1') {
     working.osc.target_port = 9001;
     setTimeout(() => queue({ snap: snapshot(), close_requested: true }), 150);
+  }
+  if (params.get('pending') === '1') {
+    setTimeout(() => systemOpen(PRACTICE_PATH), 2000);
   }
 
   return {
@@ -621,68 +817,71 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
     case 'update_project':
       return updateProject(args.project as Project);
     case 'save_project':
-      saved.set(working.id, { project: clone(working), modified: Date.now() });
-      log('success', `Project "${working.name}" saved`);
+      if (!workingPath) throw 'NO_PATH';
+      writeFile(workingPath);
       return state();
-    case 'revert_project': {
-      const file = saved.get(working.id);
-      if (file) open(file.project);
-      return state();
-    }
-    case 'open_project': {
-      const file = saved.get(String(args.id));
-      if (!file) throw `Project ${String(args.id)} was not found. It may have been deleted.`;
-      open(file.project);
+    case 'save_project_as': {
+      // Browser mock: no dialog. The file is named after the project, in the
+      // folder of the current file or the documents folder.
+      if (params.get('dialog') === 'cancel') return null;
+      const dir = workingPath ? workingPath.slice(0, Math.max(workingPath.lastIndexOf('\\'), 0)) : DOCS;
+      const base = (working.name || 'Untitled').replace(/[\\/:*?"<>|]/g, '_');
+      writeFile(`${dir}\\${base}.vrcmt`);
       return state();
     }
-    case 'new_project': {
-      const p = makeProject(`p-${nextId++}-${Date.now().toString(36)}`, String(args.name));
-      saved.set(p.id, { project: clone(p), modified: Date.now() });
-      open(p);
+    case 'revert_project':
+      working = clone(baseline);
+      pushSnapshot();
       return state();
-    }
-    case 'duplicate_project': {
-      const p = clone(working);
-      const secret = secrets.get(working.id);
-      p.id = `p-${nextId++}-${Date.now().toString(36)}`;
-      p.name = String(args.name);
-      if (secret) secrets.set(p.id, secret);
-      saved.set(p.id, { project: clone(p), modified: Date.now() });
-      open(p);
+    case 'new_project':
+      open(makeProject(`p-${nextId++}`, 'Untitled'), null);
       return state();
-    }
-    case 'delete_project': {
-      const id = String(args.id);
-      const name = saved.get(id)?.project.name ?? id;
-      saved.delete(id);
-      secrets.delete(id);
-      log('warn', `Project "${name}" deleted`);
-      if (working.id === id) {
-        if (!saved.size) {
-          const p = makeProject(`p-${nextId++}-${Date.now().toString(36)}`, 'Default');
-          saved.set(p.id, { project: clone(p), modified: Date.now() });
-        }
-        open(projectList().map((info) => saved.get(info.id)!.project)[0]);
+    case 'open_project_dialog': {
+      if (params.get('dialog') === 'cancel') return null;
+      // Browser mock: no dialog. Alternates between a project file and a v1 config.json.
+      if (workingPath !== PRACTICE_PATH && files.has(PRACTICE_PATH)) {
+        open(files.get(PRACTICE_PATH)!, PRACTICE_PATH);
+        return state();
       }
-      return state();
-    }
-    case 'import_project': {
       // What importing a v1 config.json produces: ports are name patterns without an id.
-      const p = makeProject(`p-${nextId++}-${Date.now().toString(36)}`, 'Imported config');
+      const p = makeProject(`p-${nextId++}`, 'config');
       p.midi.input = { id: '', name: 'MRCC' };
       p.midi.output = { id: '', name: 'loopMIDI' };
       p.osc.sending_addresses = [
         { name: 'Hue Shift', addr: '/avatar/parameters/HUE', type: 'float', default: 0, min: 0, max: 1 },
       ];
-      saved.set(p.id, { project: clone(p), modified: Date.now() });
-      open(p);
-      log('success', 'Imported config.json (browser mock: no file dialog)');
+      open(p, null);
+      log('success', 'Imported C:\\Users\\you\\Downloads\\config.json (browser mock: no file dialog)');
       return state();
     }
-    case 'export_project': {
-      const file = `${slug(working.name) || 'project'}.json`;
-      return `C:\\Users\\you\\Documents\\${file}`;
+    case 'open_file': {
+      const path = String(args.path);
+      const file = files.get(path);
+      if (!file) throw `Cannot read ${path}: The system cannot find the file specified. (os error 2)`;
+      open(file, path);
+      return state();
     }
+    case 'remove_recent':
+      recentPaths = recentPaths.filter((p) => p !== String(args.path));
+      return state();
+    case 'take_pending_open': {
+      const path = pendingOpen;
+      pendingOpen = null;
+      return path;
+    }
+
+    case 'check_update':
+      await new Promise((r) => setTimeout(r, 600));
+      return clone(UPDATE);
+    case 'install_update':
+      if (APP.update_mode !== 'auto') {
+        throw 'This installation cannot update itself. Download the new version from the release page.';
+      }
+      fakeInstall();
+      return;
+    case 'open_release':
+      window.open(`${APP.repository}/releases/tag/v${String(args.version)}`, '_blank', 'noopener');
+      return;
 
     case 'save_ui':
       try {

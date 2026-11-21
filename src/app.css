@@ -86,6 +86,27 @@
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 
+/*
+ * CJK languages name their UI fonts first, so Han characters get the glyph
+ * forms of that language (a Japanese 直 is not a Chinese 直), then fall back
+ * to the system stack. `<html lang>` is set by setLocale; :lang() matches by
+ * prefix, so zh-Hans is caught by :lang(zh).
+ */
+:root:lang(ja) {
+  --font-ui: 'Yu Gothic UI', Meiryo, 'Hiragino Sans', 'Noto Sans CJK JP', system-ui, -apple-system, 'Segoe UI',
+    Roboto, 'Helvetica Neue', 'Noto Sans', sans-serif;
+}
+
+:root:lang(zh) {
+  --font-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', 'Noto Sans', sans-serif;
+}
+
+:root:lang(ko) {
+  --font-ui: 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', 'Noto Sans', sans-serif;
+}
+
 /* Engines without scrollbar-color (older WebKitGTK and WKWebView) take the legacy pseudo-elements. */
 @supports not (scrollbar-color: auto) {
   .scroller {
@@ -456,26 +477,28 @@ textarea,
     appearance: base-select;
   }
 
+  /*
+   * The selected label is a box in the select's user-agent shadow tree that
+   * cannot be styled, so it cannot be shortened with an ellipsis. Instead the
+   * label stays on one line and is cut at the content box, and the chevron is
+   * the background image of the fallback, in the padding the label never
+   * reaches (a ::picker-icon would be covered by a long label).
+   */
   .select {
-    display: inline-flex;
-    align-items: center;
-    padding-inline-end: var(--sp-3);
-    background-image: none;
+    display: inline-block;
+    align-content: center;
+    min-inline-size: 0;
+    overflow: clip;
+    overflow-clip-margin: content-box;
+    white-space: nowrap;
   }
 
-  /* The same chevron as the fallback above, drawn in the current colour. */
   .select::picker-icon {
-    content: '';
-    flex: none;
-    inline-size: 16px;
-    block-size: 16px;
-    margin-inline-start: auto;
-    background-color: var(--text-dim);
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E")
-      center / contain no-repeat;
+    display: none;
   }
 
   .select::picker(select) {
+    white-space: normal;
     margin-block: var(--sp-1);
     padding: var(--sp-1);
     border: 1px solid var(--line);
@@ -714,6 +737,23 @@ input[type='range'].range:focus-visible {
   }
 }
 
+/* A small tag beside a label, such as the MIDI trigger of a custom control. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  block-size: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 /* ------------------------------------------------------------------------ */
 /* Tables (editable lists)                                                  */
 /* ------------------------------------------------------------------------ */
@@ -730,6 +770,9 @@ input[type='range'].range:focus-visible {
   font-size: var(--fs-sm);
   font-weight: 500;
   text-align: start;
+  /* A one-word header longer than its column breaks instead of running into the next one. */
+  overflow-wrap: break-word;
+  hyphens: auto;
 }
 
 .table td {
@@ -745,6 +788,12 @@ input[type='range'].range:focus-visible {
 .table th:last-child,
 .table td:last-child {
   padding-inline-end: 0;
+}
+
+/* Narrow columns: less padding around the label and the chevron. */
+.table .select {
+  padding-inline: var(--sp-2) 28px;
+  background-position: right 8px center;
 }
 
 .table .cell-text {

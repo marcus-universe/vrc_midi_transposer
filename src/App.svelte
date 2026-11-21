@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app } from './lib/app.svelte';
+  import { t } from './lib/i18n/i18n.svelte';
   import { api } from './lib/ipc';
   import Console from './lib/components/Console.svelte';
   import Dialogs from './lib/components/Dialogs.svelte';
@@ -22,10 +23,17 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-    if (e.key.toLowerCase() === 's') {
+    const key = e.key.toLowerCase();
+    // Not while a dialog is asking something: its buttons are the way forward.
+    const free = !app.busy && !app.dialog;
+    if (key === 's') {
       e.preventDefault();
-      // Not while a dialog is asking something: its buttons are the way forward.
-      if (app.dirty && !app.busy && !app.dialog) void app.save();
+      if (!free) return;
+      if (e.shiftKey) void app.saveAs();
+      else if (app.dirty) void app.save();
+    } else if (key === 'o' && !e.shiftKey) {
+      e.preventDefault();
+      if (free) app.openDialog();
     } else if (e.key === '`' || e.code === 'Backquote') {
       e.preventDefault();
       app.toggleConsole();
@@ -48,11 +56,24 @@
     <main class="main scroller" bind:this={main}>
       {#if app.notice}
         <div class={['notice', app.notice.kind]} role={app.notice.kind === 'error' ? 'alert' : 'status'}>
-          <Icon name={app.notice.kind === 'error' ? 'alert' : 'check'} size={16} />
+          <Icon name={app.notice.kind === 'error' ? 'alert' : app.notice.action ? 'download' : 'check'} size={16} />
           <p class="selectable">
-            {#if app.notice.kind === 'error'}<span class="visually-hidden">Error: </span>{/if}{app.notice.text}
+            {#if app.notice.kind === 'error'}<span class="visually-hidden">{t('common.errorPrefix')} </span>{/if}{app.notice.text()}
           </p>
-          <button type="button" class="btn btn-ghost btn-icon" aria-label="Dismiss" onclick={() => (app.notice = null)}>
+          {#if app.notice.action}
+            <button
+              type="button"
+              class="btn"
+              onclick={() => {
+                const notice = app.notice;
+                app.notice = null;
+                notice?.action?.run();
+              }}
+            >
+              {app.notice.action.label()}
+            </button>
+          {/if}
+          <button type="button" class="btn btn-ghost btn-icon" aria-label={t('common.dismiss')} onclick={() => (app.notice = null)}>
             <Icon name="close" size={16} />
           </button>
         </div>
@@ -106,6 +127,8 @@
   }
 
   .main {
+    /* Contains visually hidden labels, which would otherwise extend the page and let it scroll. */
+    position: relative;
     grid-area: main;
     container: main / inline-size;
     min-block-size: 0;
@@ -151,6 +174,10 @@
     color: var(--ok);
   }
 
+  .notice.info:has(> .btn:not(.btn-icon)) > :global(svg) {
+    color: var(--accent-text);
+  }
+
   /* Shared frame of the form views. */
   .main :global(.view) {
     display: flex;
@@ -169,6 +196,7 @@
 
   .main :global(.view-head h1) {
     font-size: var(--fs-lg);
+    text-wrap: balance;
     font-weight: 600;
     line-height: 1.3;
   }
