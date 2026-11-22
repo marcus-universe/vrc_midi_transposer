@@ -64,6 +64,7 @@ The language is an app setting, so a project file looks the same in every langua
 | **OSC target** | Host and port of VRChat (default `127.0.0.1:9000`) |
 | **Custom controls** | Your own avatar parameters: name, OSC address, toggle or slider, default, minimum, maximum, and an optional MIDI trigger |
 | **MQTT** | Enabled, broker host and port, base topic, user name (the password stays on the computer) |
+| **Arp / Sequencer** | Mode, clock source and internal tempo, arpeggiator settings, the step sequence (see [ARP_SEQUENCER.md](ARP_SEQUENCER.md)) |
 | **On start** | Whether OSC sending is on, whether original or transposed notes are sent, debug logging |
 
 ### Listening addresses

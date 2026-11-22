@@ -11,6 +11,7 @@
   import Dashboard from './lib/views/Dashboard.svelte';
   import MqttView from './lib/views/MqttView.svelte';
   import OscView from './lib/views/OscView.svelte';
+  import PatternView from './lib/views/PatternView.svelte';
   import SettingsView from './lib/views/SettingsView.svelte';
 
   let main = $state<HTMLElement>();
@@ -84,6 +85,8 @@
           <Dashboard />
         {:else if app.ui.view === 'osc'}
           <OscView />
+        {:else if app.ui.view === 'pattern'}
+          <PatternView />
         {:else if app.ui.view === 'mqtt'}
           <MqttView />
         {:else}

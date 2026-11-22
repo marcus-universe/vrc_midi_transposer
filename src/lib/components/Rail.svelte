@@ -8,6 +8,7 @@
   const items: { view: View; label: () => string; icon: IconName }[] = [
     { view: 'dashboard', label: () => t('rail.dashboard'), icon: 'dashboard' },
     { view: 'osc', label: () => 'OSC', icon: 'osc' },
+    { view: 'pattern', label: () => t('rail.pattern'), icon: 'pattern' },
     { view: 'mqtt', label: () => 'MQTT', icon: 'mqtt' },
     {
       view: 'settings',

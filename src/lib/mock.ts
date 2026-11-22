@@ -11,11 +11,18 @@
 //   ?dialog=cancel            the native Save As and Open dialogs are cancelled
 //   ?pending=1                the system asks to open a file 2 s after start (double-click on a .vrcmt)
 //   ?fresh=1                  start with a new, never saved project
+//   ?pattern=arp|seq          start with the arpeggiator or the sequencer on
+//   ?play=1                   with ?pattern=seq: press Play at start
+//
+// Fake MIDI clock: "MRCC" and "loopMIDI Port" send a clock at the project's
+// tempo, "Arturia KeyLab 61" sends none. Without a clock the internal tempo
+// plays if it is allowed, otherwise there is no clock at all.
 //
 // From the browser console: `mockOpenFile('C:\\path\\file.vrcmt')` simulates a
 // double-click on a project file while the app runs.
 
 import { clamp, defaultListenAddresses, fileName } from './format';
+import { IDLE_TRANSPORT, defaultPattern, rateTicks } from './pattern';
 import type {
   AppInfo,
   EngineCmd,
@@ -33,6 +40,7 @@ import type {
   ProjectState,
   RecentFile,
   Snapshot,
+  Transport,
   UpdateInfo,
 } from './ipc';
 
@@ -120,6 +128,7 @@ function makeProject(id: string, name: string): Project {
     },
     transpose: { min: -24, max: 24 },
     debug: false,
+    pattern: defaultPattern(),
   };
 }
 
@@ -153,6 +162,8 @@ function demoProject(): Project {
   p.mqtt.broker_host = '192.168.1.20';
   p.mqtt.username = 'transposer';
   p.mqtt.password_set = true;
+  const mode = params.get('pattern');
+  if (mode === 'arp' || mode === 'seq') p.pattern.mode = mode;
   return p;
 }
 
@@ -292,23 +303,29 @@ const noteVel = new Map<number, number>();
 /** [pitch bend 0..16383, mod wheel 0..127] */
 let wheels: [number, number] = [8192, 0];
 
+/** Notes the output plays: as played, or what the arpeggiator / sequencer generates (before transposing). */
+function playedNotes(): Iterable<number> {
+  return working.pattern.mode === 'off' ? inputNotes : genNotes.keys();
+}
+
 function keyWords(): number[] {
   const words = [0, 0, 0, 0, 0, 0, 0, 0];
-  for (const n of inputNotes) {
-    words[n >> 5] = (words[n >> 5] | (1 << (n & 31))) >>> 0;
+  for (const n of inputNotes) words[n >> 5] = (words[n >> 5] | (1 << (n & 31))) >>> 0;
+  for (const n of playedNotes()) {
     const out = clamp(n + session.transpose, 0, 127);
     words[4 + (out >> 5)] = (words[4 + (out >> 5)] | (1 << (out & 31))) >>> 0;
   }
   return words;
 }
 
-/** Same shape as the engine: keys, velocities in bit order, wheels. */
-function visual(): { keys: number[]; vel: number[]; wheels: [number, number] } {
+/** Same shape as the engine: keys, velocities in bit order, wheels, transport. */
+function visual(): { keys: number[]; vel: number[]; wheels: [number, number]; transport: Transport } {
   const keys = keyWords();
   const velOf = new Map<number, number>();
-  for (const n of inputNotes) {
-    const v = noteVel.get(n) ?? 100;
-    velOf.set(n, v);
+  for (const n of inputNotes) velOf.set(n, noteVel.get(n) ?? 100);
+  const gen = working.pattern.mode !== 'off';
+  for (const n of playedNotes()) {
+    const v = gen ? (genNotes.get(n) ?? 100) : (noteVel.get(n) ?? 100);
     const out = clamp(n + session.transpose, 0, 127);
     velOf.set(128 + out, Math.max(v, velOf.get(128 + out) ?? 0));
   }
@@ -318,7 +335,7 @@ function visual(): { keys: number[]; vel: number[]; wheels: [number, number] } {
       if ((keys[w] >>> bit) & 1) vel.push(velOf.get((w >> 2) * 128 + (w & 3) * 32 + bit) ?? 100);
     }
   }
-  return { keys, vel, wheels: [...wheels] as [number, number] };
+  return { keys, vel, wheels: [...wheels] as [number, number], transport: { ...transport } };
 }
 
 /** Same order as the engine: id, then exact name, then name as a substring. */
@@ -363,6 +380,10 @@ function snapshot(): Snapshot {
     outputs: clone(OUTPUTS),
     midi_in: midiStatus(working.midi.input, INPUTS),
     midi_out: midiStatus(working.midi.output, OUTPUTS),
+    clock_device:
+      working.pattern.clock.source === 'device'
+        ? midiStatus(working.pattern.clock.device, INPUTS)
+        : { state: 'none', id: '', name: '', detail: '' },
     osc_listener: portClash
       ? {
           state: 'error',
@@ -436,6 +457,8 @@ function open(project: Project, path: string | null) {
   session.learning = null;
   applyOpenValues();
   connectMqttSoon();
+  stopSequencer();
+  updateClock();
   log('info', `Project "${working.name}" loaded`);
   pushSnapshot();
   pushKeys();
@@ -477,6 +500,8 @@ function updateProject(next: Project): ProjectState {
     before.mqtt.broker_port !== working.mqtt.broker_port ||
     before.mqtt.enabled !== working.mqtt.enabled;
   if (brokerChanged) connectMqttSoon();
+  if (before.pattern.mode !== working.pattern.mode) stopSequencer();
+  updateClock();
   pushSnapshot();
   pushKeys();
   return state();
@@ -551,6 +576,17 @@ function engine(cmd: EngineCmd) {
         log('success', `MIDI Learn: ${trigger.kind} ${trigger.number} on channel ${trigger.channel ?? 'any'}`);
         pushSnapshot();
       }, 1500);
+      break;
+    case 'seq_play':
+      if (working.pattern.mode !== 'seq') break;
+      if (cmd.on && !transport.playing && !transport.armed) {
+        transport.armed = true;
+        log('info', 'Sequencer starts on the next bar');
+      } else if (!cmd.on || transport.armed) {
+        stopSequencer();
+        log('info', 'Sequencer stopped');
+      }
+      pushKeys();
       break;
   }
   pushSnapshot();
@@ -683,6 +719,7 @@ function demoTick() {
   for (const n of next) {
     if (!inputNotes.has(n)) {
       inputNotes.add(n);
+      lastPressed = n;
       // Bass soft, melody loud, with some variation.
       noteVel.set(n, clamp(Math.round(25 + (n - 40) * 2.2 + Math.random() * 25), 10, 127));
       if (session.debug) {
@@ -708,6 +745,120 @@ function wheelTick() {
     wheels = [pitch, modw];
     pushKeys();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Fake MIDI clock, arpeggiator and sequencer
+// ---------------------------------------------------------------------------
+
+/** Ports that pretend to send MIDI clock. */
+const CLOCK_PORTS = new Set(['MRCC', 'loopMIDI Port']);
+const transport: Transport = { ...IDLE_TRANSPORT };
+/** Notes the arpeggiator or sequencer holds now, with their velocity. */
+const genNotes = new Map<number, number>();
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+let clockTick = 0;
+let tickDebt = 0;
+let lastClockAt = 0;
+let playStart = 0;
+let lastPressed: number | null = null;
+
+function clockKind(): Transport['clock'] {
+  const c = working.pattern.clock;
+  const ref = c.source === 'device' ? c.device : working.midi.input;
+  const port = resolvePort(ref, INPUTS);
+  if (port && CLOCK_PORTS.has(port.name)) return 'external';
+  return c.internal_fallback ? 'internal' : 'none';
+}
+
+/** Start, stop or retime the clock after a change. Runs only while a mode is on. */
+function updateClock() {
+  const kind = clockKind();
+  transport.clock = kind;
+  transport.bpm = kind === 'none' ? 0 : Math.round(working.pattern.clock.bpm * 10) / 10;
+  const run = kind !== 'none' && working.pattern.mode !== 'off' && visible;
+  if (run && clockTimer === undefined) {
+    lastClockAt = performance.now();
+    tickDebt = 0;
+    clockTimer = setInterval(clockStep, 8);
+  } else if (!run && clockTimer !== undefined) {
+    clearInterval(clockTimer);
+    clockTimer = undefined;
+  }
+}
+
+function stopSequencer() {
+  transport.playing = false;
+  transport.armed = false;
+  transport.step = -1;
+  genNotes.clear();
+}
+
+function clockStep() {
+  const now = performance.now();
+  const tickMs = 60_000 / (Math.max(transport.bpm, 1) * 24);
+  tickDebt += (now - lastClockAt) / tickMs;
+  lastClockAt = now;
+  let changed = false;
+  // After a long pause (a hidden tab) skip ahead instead of catching up.
+  if (tickDebt > 96) tickDebt = 1;
+  while (tickDebt >= 1) {
+    tickDebt -= 1;
+    changed = onClockTick() || changed;
+  }
+  if (changed) pushKeys();
+}
+
+/** One MIDI clock tick (24 per quarter). True when something visible changed. */
+function onClockTick(): boolean {
+  clockTick++;
+  const pat = working.pattern;
+  let changed = false;
+  const beat = Math.floor(clockTick / 24) % 4;
+  if (beat !== transport.beat) {
+    transport.beat = beat;
+    changed = true;
+  }
+  if (pat.mode === 'seq') {
+    if (transport.armed && clockTick % 96 === 0) {
+      transport.armed = false;
+      transport.playing = true;
+      playStart = clockTick;
+      transport.step = -1;
+      changed = true;
+    }
+    if (transport.playing) {
+      const len = clamp(pat.seq.length, 1, 64);
+      const step = Math.floor((clockTick - playStart) / rateTicks(pat.seq.rate)) % len;
+      if (step !== transport.step) {
+        transport.step = step;
+        const s = pat.seq.steps[step];
+        const base = lastPressed !== null && inputNotes.has(lastPressed) ? lastPressed : pat.seq.root;
+        if (!s.tie) {
+          genNotes.clear();
+          const n = base + s.offset;
+          if (s.on && n >= 0 && n <= 127) genNotes.set(n, s.velocity);
+        }
+        changed = true;
+      }
+    }
+  } else if (pat.mode === 'arp') {
+    const rate = rateTicks(pat.arp.rate);
+    if (clockTick % rate === 0) {
+      const held = [...inputNotes].sort((a, b) => a - b);
+      const notes: number[] = [];
+      for (let o = 0; o < pat.arp.octaves; o++) for (const n of held) notes.push(n + o * 12);
+      if (pat.arp.style === 'down') notes.reverse();
+      genNotes.clear();
+      if (notes.length) {
+        const index = Math.floor(clockTick / rate);
+        const chosen = pat.arp.style === 'chord' ? notes : [notes[index % notes.length]];
+        for (const n of chosen) if (n <= 127) genNotes.set(n, pat.arp.velocity ?? noteVel.get(n % 128) ?? 100);
+      }
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 // ---------------------------------------------------------------------------
@@ -784,6 +935,8 @@ export async function mockSubscribe(onFrame: (frame: Frame) => void): Promise<In
   if (params.get('pending') === '1') {
     setTimeout(() => systemOpen(PRACTICE_PATH), 2000);
   }
+  updateClock();
+  if (params.get('play') === '1' && working.pattern.mode === 'seq' && !transport.playing) transport.armed = true;
 
   return {
     ...state(),
@@ -800,6 +953,7 @@ export async function mockInvoke(cmd: string, args: Record<string, unknown> = {}
   switch (cmd) {
     case 'set_visible':
       visible = Boolean(args.visible);
+      updateClock();
       if (visible) queue({ snap: snapshot(), ...visual() });
       return;
     case 'engine_cmd':

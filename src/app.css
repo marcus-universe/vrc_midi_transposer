@@ -846,7 +846,8 @@ dialog::backdrop {
  * Reduced motion (on Windows this follows "Animation effects" in the system
  * settings). Movement is switched off, but regions marked .motion-safe keep
  * their transitions: there they only fade (piano keys) or show the live value
- * of a control (wheels). The transpose number cross-fades instead of sliding
+ * of a control (wheels). The transpose number always slides, on purpose: it
+ * uses the Web Animations API, which this rule does not reach
  * (RollingNumber.svelte).
  */
 @media (prefers-reduced-motion: reduce) {

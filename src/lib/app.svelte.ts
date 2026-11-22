@@ -11,14 +11,16 @@ import {
   type ProjectState,
   type RecentFile,
   type Snapshot,
+  type Transport,
   type UpdateInfo,
   type UpdateProgress,
 } from './ipc';
 import { fileName } from './format';
+import { IDLE_TRANSPORT, defaultPattern } from './pattern';
 import { detectLocale, isLocale, setLocale, t, type Locale } from './i18n/i18n.svelte';
 
-export type View = 'dashboard' | 'osc' | 'mqtt' | 'settings';
-export const VIEWS: View[] = ['dashboard', 'osc', 'mqtt', 'settings'];
+export type View = 'dashboard' | 'osc' | 'pattern' | 'mqtt' | 'settings';
+export const VIEWS: View[] = ['dashboard', 'osc', 'pattern', 'mqtt', 'settings'];
 
 export interface UiState {
   view: View;
@@ -102,6 +104,7 @@ const EMPTY_SNAPSHOT: Snapshot = {
   outputs: [],
   midi_in: { state: 'none', id: '', name: '', detail: '' },
   midi_out: { state: 'none', id: '', name: '', detail: '' },
+  clock_device: { state: 'none', id: '', name: '', detail: '' },
   osc_listener: { state: 'stopped', detail: '', bound: '' },
   osc_target: '',
   mqtt: { state: 'disabled', detail: '', entities: 0, last_command: null, last_command_ts: 0 },
@@ -135,6 +138,7 @@ const EMPTY_PROJECT: Project = {
   },
   transpose: { min: -24, max: 24 },
   debug: false,
+  pattern: defaultPattern(),
 };
 
 const EMPTY_APP: AppInfo = {
@@ -150,6 +154,14 @@ const EMPTY_APP: AppInfo = {
 };
 
 type KeysListener = (keys: readonly number[], vel: readonly number[], wheels: readonly [number, number]) => void;
+type TransportListener = (transport: Readonly<Transport>) => void;
+
+/** The parts of the transport that change rarely (not per beat or step). */
+export interface PlayState {
+  clock: Transport['clock'];
+  playing: boolean;
+  armed: boolean;
+}
 type LogListener = (added: readonly LogLine[], cleared: boolean) => void;
 
 function errorText(e: unknown): string {
@@ -206,10 +218,19 @@ class AppStore {
   vel: number[] = [];
   /** [pitch bend 0..16383, mod wheel 0..127] */
   wheels: [number, number] = [8192, 0];
+  /**
+   * Clock and sequencer, up to once per display frame while playing. Not
+   * reactive: beat dots, the BPM readout and the playhead subscribe with
+   * `onTransport` and patch the DOM.
+   */
+  transport: Transport = { ...IDLE_TRANSPORT };
+  /** The low-rate part of `transport`, reactive for the Play button and the clock source line. */
+  play = $state.raw<PlayState>({ clock: 'none', playing: false, armed: false });
   /** Set when the user opens the console, so its input takes focus once mounted. */
   focusConsole = false;
 
   #keysListeners = new Set<KeysListener>();
+  #transportListeners = new Set<TransportListener>();
   #logListeners = new Set<LogListener>();
   #updateTimer: ReturnType<typeof setTimeout> | undefined;
   #uiTimer: ReturnType<typeof setTimeout> | undefined;
@@ -253,6 +274,7 @@ class AppStore {
       this.keys = init.keys;
       this.vel = init.vel ?? [];
       this.wheels = init.wheels ?? [8192, 0];
+      if (init.transport) this.#takeTransport(init.transport);
       this.#restoreUi(init.ui);
       this.ready = true;
       this.#emitLogs([], true);
@@ -294,6 +316,7 @@ class AppStore {
       if (frame.wheels) this.wheels = frame.wheels;
       this.#emitKeys();
     }
+    if (frame.transport) this.#takeTransport(frame.transport);
     if (frame.update) this.updateProgress = frame.update;
     if (frame.close_requested) {
       if (!this.ready) this.#quitQueued = true;
@@ -312,6 +335,36 @@ class AppStore {
   onLogs(fn: LogListener): () => void {
     this.#logListeners.add(fn);
     return () => this.#logListeners.delete(fn);
+  }
+
+  onTransport(fn: TransportListener): () => void {
+    this.#transportListeners.add(fn);
+    return () => this.#transportListeners.delete(fn);
+  }
+
+  #takeTransport(next: Transport) {
+    const prev = this.transport;
+    this.transport = next;
+    const p = this.play;
+    if (p.clock !== next.clock || p.playing !== next.playing || p.armed !== next.armed) {
+      this.play = { clock: next.clock, playing: next.playing, armed: next.armed };
+    }
+    // The transport arrives with every key frame; listeners only hear about real changes.
+    if (
+      prev.beat !== next.beat ||
+      prev.step !== next.step ||
+      prev.bpm !== next.bpm ||
+      prev.clock !== next.clock ||
+      prev.playing !== next.playing ||
+      prev.armed !== next.armed
+    ) {
+      for (const fn of this.#transportListeners) fn(next);
+    }
+  }
+
+  /** Sequencer Play (from the next bar) or Stop. Play while armed cancels. */
+  seqPlay(on: boolean) {
+    return this.engine({ type: 'seq_play', on });
   }
 
   #emitKeys() {

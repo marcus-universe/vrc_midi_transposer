@@ -2,8 +2,10 @@
   import { app } from '../app.svelte';
   import { shortNumber, signed, triggerLabel } from '../format';
   import { t, tn } from '../i18n/i18n.svelte';
-  import type { MidiStatus, PortInfo, PortRef } from '../ipc';
+  import type { MidiStatus, PortInfo } from '../ipc';
+  import { NONE, SAVED, midiLine, portFromOption, portSelection } from '../ports';
   import Icon from '../components/Icon.svelte';
+  import PatternStatus from '../components/PatternStatus.svelte';
   import RollingNumber from '../components/RollingNumber.svelte';
   import Segmented from '../components/Segmented.svelte';
   import Slider from '../components/Slider.svelte';
@@ -25,49 +27,14 @@
   }
 
   // --- MIDI ports ----------------------------------------------------------
-  const NONE = '';
-  const SAVED = '__saved__';
-
-  /**
-   * Which option is selected. A connected port wins (the engine may have matched
-   * a saved name pattern that has no id); otherwise the saved reference by id,
-   * then by exact name; otherwise an extra "(not connected)" option.
-   */
-  function selection(ref: PortRef | null, status: MidiStatus, ports: PortInfo[]) {
-    if (!ref) return { value: NONE, extra: null };
-    if (status.state === 'connected' && ports.some((x) => x.id === status.id)) {
-      return { value: status.id, extra: null };
-    }
-    const match =
-      ports.find((x) => ref.id !== '' && x.id === ref.id) ?? ports.find((x) => x.name === ref.name);
-    return match ? { value: match.id, extra: null } : { value: SAVED, extra: ref };
-  }
-
-  const inSel = $derived(selection(p.midi.input, s.midi_in, s.inputs));
-  const outSel = $derived(selection(p.midi.output, s.midi_out, s.outputs));
+  const inSel = $derived(portSelection(p.midi.input, s.midi_in, s.inputs));
+  const outSel = $derived(portSelection(p.midi.output, s.midi_out, s.outputs));
 
   function choose(which: 'input' | 'output', value: string) {
-    if (value === SAVED) return;
-    const ports = which === 'input' ? s.inputs : s.outputs;
-    const port = ports.find((x) => x.id === value);
-    p.midi[which] = port ? { id: port.id, name: port.name } : null;
+    const port = portFromOption(value, which === 'input' ? s.inputs : s.outputs);
+    if (port === undefined) return;
+    p.midi[which] = port;
     app.touch(true);
-  }
-
-  function midiLine(st: MidiStatus): { tone: string; text: string } {
-    switch (st.state) {
-      case 'connected':
-        return { tone: 'ok', text: t('status.connected') };
-      case 'missing':
-        return { tone: 'warn', text: t('dashboard.portMissing') };
-      case 'error':
-        return {
-          tone: 'err',
-          text: st.detail ? t('common.errorDetail', { detail: st.detail }) : t('dashboard.portErrorUnknown'),
-        };
-      default:
-        return { tone: '', text: t('dashboard.noPort') };
-    }
   }
 
   // --- Status --------------------------------------------------------------
@@ -242,6 +209,8 @@
       <dd><span class={['dot', listener.tone]}></span><span>{listener.text}</span></dd>
       <dt>MQTT</dt>
       <dd><span class={['dot', mqtt.tone]}></span><span>{mqtt.text}</span></dd>
+      <dt>{t('pattern.short')}</dt>
+      <dd class="pattern"><PatternStatus /></dd>
     </dl>
   </section>
 
@@ -514,7 +483,8 @@
 
   .states {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    /* A long label (the arpeggiator row in some languages) wraps instead of squeezing the values. */
+    grid-template-columns: fit-content(40%) minmax(0, 1fr);
     gap: var(--sp-2) var(--sp-4);
     font-size: var(--fs-sm);
   }
@@ -535,6 +505,11 @@
     align-self: flex-start;
     inset-block-start: 6px;
   }
+
+  .states dd.pattern {
+    display: block;
+  }
+
 
   /* --- Custom controls --------------------------------------------------- */
 

@@ -64,6 +64,8 @@ export interface Snapshot {
   outputs: PortInfo[];
   midi_in: MidiStatus;
   midi_out: MidiStatus;
+  /** The separate MIDI clock device (`project.pattern.clock.device`); `none` unless the clock source is a device. */
+  clock_device: MidiStatus;
   osc_listener: { state: ServiceState; detail: string; bound: string };
   /** Resolved OSC target, `host:port`. */
   osc_target: string;
@@ -183,6 +185,155 @@ export interface Project {
   transpose: { min: number; max: number };
   /** Applied when the project is opened. */
   debug: boolean;
+  /** Arpeggiator and step sequencer. */
+  pattern: PatternSettings;
+}
+
+// ---------------------------------------------------------------------------
+// Arpeggiator and sequencer (crates/engine/src/project/pattern.rs)
+// ---------------------------------------------------------------------------
+
+export type PatternMode = 'off' | 'arp' | 'seq';
+
+/** Note length of one step. `T` is a triplet, `D` dotted. Bars are 4/4. */
+export type Rate =
+  | '1/1'
+  | '1/2'
+  | '1/2T'
+  | '1/4D'
+  | '1/4'
+  | '1/4T'
+  | '1/8D'
+  | '1/8'
+  | '1/8T'
+  | '1/16D'
+  | '1/16'
+  | '1/16T'
+  | '1/32'
+  | '1/32T';
+
+/** Every rate, longest first (menu order). */
+export const RATES: readonly Rate[] = [
+  '1/1',
+  '1/2',
+  '1/2T',
+  '1/4D',
+  '1/4',
+  '1/4T',
+  '1/8D',
+  '1/8',
+  '1/8T',
+  '1/16D',
+  '1/16',
+  '1/16T',
+  '1/32',
+  '1/32T',
+];
+
+export type ArpStyle =
+  | 'up'
+  | 'down'
+  | 'up_down'
+  | 'down_up'
+  /** Up then down, playing the top and bottom note twice. */
+  | 'up_down_inclusive'
+  /** In the order the keys were pressed. */
+  | 'played'
+  | 'reverse'
+  | 'random'
+  /** All held notes together on every step. */
+  | 'chord';
+
+/** Every style, in menu order. Labels are in the dictionaries (`pattern.styles.<style>`). */
+export const ARP_STYLES: readonly ArpStyle[] = [
+  'up',
+  'down',
+  'up_down',
+  'down_up',
+  'up_down_inclusive',
+  'played',
+  'reverse',
+  'random',
+  'chord',
+];
+
+export interface ClockSettings {
+  /** `input`: MIDI clock from the MIDI input. `device`: from `device`. */
+  source: 'input' | 'device';
+  device: PortRef | null;
+  /** Play at `bpm` while no MIDI clock arrives. */
+  internal_fallback: boolean;
+  /** Internal tempo, 20-300. */
+  bpm: number;
+}
+
+export interface ArpSettings {
+  style: ArpStyle;
+  rate: Rate;
+  /** 1-4 */
+  octaves: number;
+  /** Note length in percent of a step, 5-100. */
+  gate: number;
+  /** Delay of every second step in percent of half a step, 0-75. */
+  swing: number;
+  /** Keep playing after the keys are released. */
+  latch: boolean;
+  /** Fixed velocity 1-127; null uses the velocity of the key. */
+  velocity: number | null;
+}
+
+export interface Step {
+  on: boolean;
+  /** Semitones from the root (or from the held key), -48 to 48. */
+  offset: number;
+  /** 1-127 */
+  velocity: number;
+  /** Note length in percent of a step, 5-100. */
+  gate: number;
+  /** Hold the previous note instead of playing a new one. */
+  tie: boolean;
+}
+
+/** Steps stored in every sequence; `length` says how many play. */
+export const MAX_STEPS = 64;
+
+export interface SeqSettings {
+  rate: Rate;
+  /** 1-64 */
+  length: number;
+  /** Note the steps are relative to while no key is held, 0-127. */
+  root: number;
+  /** 0-75 */
+  swing: number;
+  /** MIDI channel 1-16 when no key was pressed yet. */
+  channel: number;
+  /** Start and stop with the MIDI Start/Stop of the clock source. */
+  follow_transport: boolean;
+  /** Always MAX_STEPS long. */
+  steps: Step[];
+}
+
+export interface PatternSettings {
+  mode: PatternMode;
+  clock: ClockSettings;
+  arp: ArpSettings;
+  seq: SeqSettings;
+}
+
+/** Clock and sequencer state. Sent with `keys`, so up to once per display frame while playing. */
+export interface Transport {
+  /** `external`: a MIDI clock arrives. `internal`: the internal tempo plays. */
+  clock: 'none' | 'external' | 'internal';
+  /** Beats per minute; 0 while unknown. */
+  bpm: number;
+  /** Beat in the bar, 0-3. */
+  beat: number;
+  /** The sequencer plays. */
+  playing: boolean;
+  /** The sequencer waits for the next bar to start. */
+  armed: boolean;
+  /** Current sequencer step, -1 when not playing. */
+  step: number;
 }
 
 export interface RecentFile {
@@ -254,6 +405,7 @@ export interface Init extends ProjectState {
   keys: number[];
   vel: number[];
   wheels: [number, number];
+  transport: Transport;
 }
 
 /**
@@ -276,6 +428,8 @@ export interface Frame {
   vel?: number[];
   /** `[pitch bend 0..16383 (8192 = centre), mod wheel 0..127]`. Sent together with `keys`. */
   wheels?: [number, number];
+  /** Clock and sequencer state. Sent together with `keys`. */
+  transport?: Transport;
   /** The log was cleared; drop all lines before applying `logs`. */
   cleared?: boolean;
   /** The user tried to close the window with unsaved changes. Ask, then call `quit`. */
@@ -300,7 +454,9 @@ export type EngineCmd =
   /** Release every held note on the output and over OSC. */
   | { type: 'panic' }
   /** MIDI Learn for a custom control; `index: null` cancels. The result arrives as `Snapshot.learned`. */
-  | { type: 'midi_learn'; index: number | null };
+  | { type: 'midi_learn'; index: number | null }
+  /** Sequencer Play (starts on the next bar line of the clock) or Stop. */
+  | { type: 'seq_play'; on: boolean };
 
 // ---------------------------------------------------------------------------
 // Transport

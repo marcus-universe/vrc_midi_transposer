@@ -75,7 +75,7 @@ Rules:
 - 120–160 ms ease-out for hover, press and drawer open. Nothing loops.
 - Respect `prefers-reduced-motion` per element, not globally (Windows sets it when "Animation effects" is off). Movement goes; fades stay. Regions marked `.motion-safe` keep their transitions: the piano keys (opacity only) and the wheels (they show a live value).
 - Piano keys: the blue fades in within about 45 ms and out over about 200 ms. Opacity only, never layout properties.
-- The transpose number rolls in from the direction of the change (`RollingNumber.svelte`, about 190 ms); with reduced motion it cross-fades.
+- The transpose number counts through every value with a slide (up when increasing, down when decreasing; each step min(150 ms, 400 ms / distance), `RollingNumber.svelte`). It slides even with reduced motion: the owner asked for it explicitly.
 
 ## Performance budget
 

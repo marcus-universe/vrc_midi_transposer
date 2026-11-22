@@ -96,6 +96,16 @@ export function shortNumber(n: number, digits = 2): string {
   return formatNumber(Number(n.toFixed(digits)), { maximumFractionDigits: digits });
 }
 
+/** 0-100 as "50 %" (or "50%", "%50") in the active language. */
+export function percent(n: number): string {
+  return formatNumber(n / 100, { style: 'percent', maximumFractionDigits: 0 });
+}
+
+/** Beats per minute with one decimal: "120.0". */
+export function bpmNumber(bpm: number): string {
+  return formatNumber(bpm, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
 /** "just now", "42 seconds ago", ... in the active language. */
 export function relativeTime(ts: number, now: number): string {
   return formatRelative(ts, now);

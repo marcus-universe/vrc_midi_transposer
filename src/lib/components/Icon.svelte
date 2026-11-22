@@ -24,6 +24,16 @@
     download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
     learn: 'M12 12h.01M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7',
     piano: 'M3 5h18v14H3zM8 5v14M13 5v14M18 5v14',
+    // Step sequencer: a piano roll of four steps at different pitches above a baseline.
+    pattern: 'M3 20h18M3.5 15h3M8.5 10h3M13.5 13h3M18.5 6h2.5',
+    play: 'M8 5.5v13l10-6.5z',
+    clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
+    tie: 'M4 15c3.5-5.5 12.5-5.5 16 0',
+    stop: 'M7 7h10v10H7z',
+    shuffle: 'M4 7h3.5c4.5 0 4.5 10 9 10H20M4 17h3.5c1.6 0 2.6-1.3 3.4-3M13.1 10c.8-1.7 1.8-3 3.4-3H20M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5',
+    left: 'm14.5 6-6 6 6 6',
+    right: 'm9.5 6 6 6-6 6',
+    eraser: 'M5 19h14M8.5 15.5 4 11l7-7 9 9-4.5 4.5zM7.5 7.5l9 9',
   } as const;
 
   export type IconName = keyof typeof PATHS;
