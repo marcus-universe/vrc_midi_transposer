@@ -216,6 +216,10 @@ const zh: Dict = {
   pattern: {
     title: '琶音器与音序器',
     short: '琶音器 / 音序器',
+    noClockShort: '没有时钟',
+    openView: '打开琶音器 / 音序器设置',
+    modeArpShort: '琶音',
+    modeSeqShort: '音序',
     intro: '将按住的琴键变成琶音，或播放步进音序，并与 MIDI 时钟同步。',
     mode: '模式',
     modeOff: '关',

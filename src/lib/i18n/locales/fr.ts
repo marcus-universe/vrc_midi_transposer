@@ -229,6 +229,10 @@ const fr: Dict = {
   pattern: {
     title: 'Arpégiateur et séquenceur',
     short: 'Arp / Séquenceur',
+    noClockShort: 'Aucune horloge',
+    openView: 'Ouvrir les réglages Arp / Séquenceur',
+    modeArpShort: 'Arp',
+    modeSeqShort: 'Séq',
     intro: 'Transformez les touches tenues en arpèges ou jouez une séquence pas à pas, synchronisées sur une horloge MIDI.',
     mode: 'Mode',
     modeOff: 'Désactivé',

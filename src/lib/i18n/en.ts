@@ -226,6 +226,10 @@ const en = {
   pattern: {
     title: 'Arpeggiator and sequencer',
     short: 'Arp / Sequencer',
+    noClockShort: 'No clock',
+    openView: 'Open the Arp / Sequencer settings',
+    modeArpShort: 'Arp',
+    modeSeqShort: 'Seq',
     intro: 'Turn held keys into arpeggios, or play a step sequence, in time with a MIDI clock.',
     mode: 'Mode',
     modeOff: 'Off',

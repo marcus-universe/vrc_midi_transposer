@@ -5,7 +5,7 @@
   import type { MidiStatus, PortInfo } from '../ipc';
   import { NONE, SAVED, midiLine, portFromOption, portSelection } from '../ports';
   import Icon from '../components/Icon.svelte';
-  import PatternStatus from '../components/PatternStatus.svelte';
+  import PatternStrip from '../components/PatternStrip.svelte';
   import RollingNumber from '../components/RollingNumber.svelte';
   import Segmented from '../components/Segmented.svelte';
   import Slider from '../components/Slider.svelte';
@@ -73,7 +73,8 @@
 <div class="dash">
   <h1 class="visually-hidden">{t('dashboard.title')}</h1>
 
-  <!-- Transpose hero -->
+  <!-- Transpose, with the arpeggiator / sequencer strip directly under it -->
+  <div class="lead">
   <section class="hero" aria-labelledby="hero-title">
     <div class="rings" aria-hidden="true"></div>
     <div class="hero-head">
@@ -129,6 +130,8 @@
       <span class="num">{signed(s.transpose_max)}</span>
     </div>
   </section>
+  <PatternStrip />
+  </div>
 
   <!-- MIDI -->
   <section class="card" aria-labelledby="midi-title">
@@ -209,8 +212,6 @@
       <dd><span class={['dot', listener.tone]}></span><span>{listener.text}</span></dd>
       <dt>MQTT</dt>
       <dd><span class={['dot', mqtt.tone]}></span><span>{mqtt.text}</span></dd>
-      <dt>{t('pattern.short')}</dt>
-      <dd class="pattern"><PatternStatus /></dd>
     </dl>
   </section>
 
@@ -288,7 +289,7 @@
     .dash {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-    .hero,
+    .lead,
     .custom {
       grid-column: 1 / -1;
     }
@@ -298,20 +299,32 @@
     .dash {
       grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) minmax(0, 1fr);
     }
-    .hero {
+    .lead {
       grid-column: auto;
     }
   }
 
   /* --- Hero -------------------------------------------------------------- */
 
-  .hero {
-    position: relative;
+  /* Transpose card and the Arp / Sequencer strip share the first column. */
+  .lead {
     display: flex;
     flex-direction: column;
     gap: var(--sp-3);
     min-inline-size: 0;
-    padding: var(--sp-4) var(--sp-5) var(--sp-4);
+  }
+
+  .lead > .hero {
+    flex: 1;
+  }
+
+  .hero {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    min-inline-size: 0;
+    padding: var(--sp-3) var(--sp-5);
     border-radius: var(--r-lg);
     background: linear-gradient(145deg, var(--accent) 0%, var(--accent-strong) 100%);
     color: var(--on-accent);
@@ -345,7 +358,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    min-block-size: 28px;
+    min-block-size: 24px;
   }
 
   .hero h2 {
@@ -384,8 +397,8 @@
     display: grid;
     flex: none;
     place-items: center;
-    inline-size: 40px;
-    block-size: 40px;
+    inline-size: 36px;
+    block-size: 36px;
     padding: 0;
     border: 1px solid var(--on-accent-line);
     border-radius: 50%;
@@ -504,10 +517,6 @@
   .states dd .dot {
     align-self: flex-start;
     inset-block-start: 6px;
-  }
-
-  .states dd.pattern {
-    display: block;
   }
 
 

@@ -222,6 +222,10 @@ const it: Dict = {
   pattern: {
     title: 'Arpeggiatore e sequencer',
     short: 'Arp / Sequencer',
+    noClockShort: 'Nessun clock',
+    openView: 'Apri le impostazioni Arp / Sequencer',
+    modeArpShort: 'Arp',
+    modeSeqShort: 'Seq',
     intro: 'Trasforma i tasti tenuti in arpeggi o suona una sequenza a passi, a tempo con un clock MIDI.',
     mode: 'Modalità',
     modeOff: 'Spento',

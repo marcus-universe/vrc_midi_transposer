@@ -227,6 +227,10 @@ const pl: Dict = {
   pattern: {
     title: 'Arpeggiator i sekwencer',
     short: 'Arp / Sekwencer',
+    noClockShort: 'Brak zegara',
+    openView: 'Otwórz ustawienia Arp / Sekwencera',
+    modeArpShort: 'Arp',
+    modeSeqShort: 'Sekw',
     intro: 'Zamieniaj trzymane klawisze w arpeggia lub odtwarzaj sekwencję krokową, w rytm zegara MIDI.',
     mode: 'Tryb',
     modeOff: 'Wył.',

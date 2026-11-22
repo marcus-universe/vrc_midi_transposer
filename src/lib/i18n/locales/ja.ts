@@ -220,6 +220,10 @@ const ja: Dict = {
   pattern: {
     title: 'アルペジエーターとシーケンサー',
     short: 'アルペジオ / シーケンサー',
+    noClockShort: 'クロックなし',
+    openView: 'アルペジオ / シーケンサーの設定を開く',
+    modeArpShort: 'Arp',
+    modeSeqShort: 'Seq',
     intro: '押さえた鍵盤をアルペジオにしたり、ステップシーケンスを再生したりします。MIDI クロックに同期します。',
     mode: 'モード',
     modeOff: 'オフ',

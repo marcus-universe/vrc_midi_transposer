@@ -216,6 +216,10 @@ const ko: Dict = {
   pattern: {
     title: '아르페지에이터와 시퀀서',
     short: '아르페지오 / 시퀀서',
+    noClockShort: '클록 없음',
+    openView: '아르페지오 / 시퀀서 설정 열기',
+    modeArpShort: 'Arp',
+    modeSeqShort: 'Seq',
     intro: '누르고 있는 건반을 아르페지오로 바꾸거나 스텝 시퀀스를 재생합니다. MIDI 클록에 맞춰 동작합니다.',
     mode: '모드',
     modeOff: '끔',
