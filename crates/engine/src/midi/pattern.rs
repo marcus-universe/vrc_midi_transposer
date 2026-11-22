@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::project::{ArpStyle, ClockSource, PatternMode, PatternSettings};
+use crate::project::{ArpStyle, ClockSource, PatternMode, PatternSettings, Step, MAX_STEPS};
 
 /// Ticks per quarter note in MIDI clock.
 pub const PPQN: u64 = 24;
@@ -70,6 +70,29 @@ pub enum ClockState {
     Internal,
 }
 
+/// Recording into the sequencer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecState {
+    #[default]
+    Off,
+    /// Every key fills the next step.
+    Step,
+    /// Live recording waits for the start of the next loop.
+    Waiting,
+    /// Live recording of one loop.
+    Live,
+}
+
+/// Steps the recording produced, for the front end to put into the project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recorded {
+    /// All `MAX_STEPS` steps.
+    pub steps: Vec<Step>,
+    pub length: u8,
+    /// Recording ended; otherwise more steps follow.
+    pub done: bool,
+}
+
 /// What the front end shows about the pattern.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Transport {
@@ -82,8 +105,9 @@ pub struct Transport {
     pub playing: bool,
     /// Sequencer waits for the next bar to start.
     pub armed: bool,
-    /// Current sequencer step, -1 when not playing.
+    /// Current sequencer step, -1 when not playing. While step recording: the step the next key fills.
     pub step: i16,
+    pub rec: RecState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,6 +117,21 @@ enum Seq {
     Armed,
     /// Running since this clock position.
     Playing(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Rec {
+    Off,
+    Step {
+        next: usize,
+        count: usize,
+    },
+    /// One loop from `boundary` (step 1); keys count from half a step before it.
+    Live {
+        boundary: u64,
+        from: u64,
+        to: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -135,6 +174,19 @@ pub struct PatternEngine {
 
     sounding: Vec<Sounding>,
     transport: Transport,
+
+    // Recording
+    rec: Rec,
+    /// Working copy of the steps while recording.
+    rec_steps: Vec<Step>,
+    /// Steps written during this live pass.
+    rec_set: [bool; MAX_STEPS],
+    /// Keys down during a live pass: (note, step, position pressed).
+    rec_open: Vec<(u8, usize, u64)>,
+    /// Keys heard while recording, played as they are: (channel, note).
+    thru: Vec<(u8, u8)>,
+    /// A result for the front end is waiting; true when recording ended.
+    recorded: Option<bool>,
 }
 
 /// Fires once per step; every second step is delayed by the swing.
@@ -177,6 +229,12 @@ impl PatternEngine {
                 step: -1,
                 ..Transport::default()
             },
+            rec: Rec::Off,
+            rec_steps: Vec::with_capacity(MAX_STEPS),
+            rec_set: [false; MAX_STEPS],
+            rec_open: Vec::with_capacity(16),
+            thru: Vec::with_capacity(128),
+            recorded: None,
         }
     }
 
@@ -191,6 +249,9 @@ impl PatternEngine {
     /// New settings. A change of mode ends whatever was playing.
     pub fn set_settings(&mut self, settings: Arc<PatternSettings>, out: &mut Vec<Gen>) {
         let mode_changed = settings.mode != self.settings.mode;
+        if mode_changed {
+            self.finish_rec(out);
+        }
         self.settings = settings;
         if mode_changed {
             self.release_all(out);
@@ -207,7 +268,11 @@ impl PatternEngine {
     }
 
     /// A key on the MIDI input (only while a pattern mode is on).
-    pub fn note(&mut self, channel: u8, note: u8, velocity: u8, pressed: bool) {
+    pub fn note(&mut self, channel: u8, note: u8, velocity: u8, pressed: bool, out: &mut Vec<Gen>) {
+        if self.rec != Rec::Off || (!pressed && self.thru.iter().any(|&(c, n)| c == channel && n == note)) {
+            self.rec_note(channel, note, velocity, pressed, out);
+            return;
+        }
         let latch = self.settings.mode == PatternMode::Arp && self.settings.arp.latch;
         if pressed {
             self.last_channel = channel;
@@ -239,10 +304,14 @@ impl PatternEngine {
             return;
         }
         if on {
+            if matches!(self.rec, Rec::Step { .. }) {
+                self.finish_rec(out);
+            }
             if self.seq == Seq::Stopped {
                 self.seq = Seq::Armed;
             }
         } else {
+            self.finish_rec(out);
             self.seq = Seq::Stopped;
             self.step = -1;
             self.release_all(out);
@@ -250,8 +319,242 @@ impl PatternEngine {
         self.refresh(Instant::now());
     }
 
+    /// Play when stopped, stop when playing or waiting for the bar.
+    pub fn toggle_play(&mut self, out: &mut Vec<Gen>) {
+        let on = self.seq == Seq::Stopped;
+        self.play(on, out);
+    }
+
+    /// Start or end recording. Stopped: step recording. Playing (or waiting
+    /// for the bar): one loop of live recording from the next loop start.
+    pub fn record(&mut self, on: bool, out: &mut Vec<Gen>) {
+        if self.settings.mode != PatternMode::Seq {
+            return;
+        }
+        if !on {
+            self.finish_rec(out);
+            self.refresh(Instant::now());
+            return;
+        }
+        if self.rec != Rec::Off {
+            return;
+        }
+        self.rec_steps.clear();
+        self.rec_steps.extend_from_slice(&self.settings.seq.steps);
+        self.rec_set = [false; MAX_STEPS];
+        self.rec_open.clear();
+        let seq = &self.settings.seq;
+        let rate = seq.rate.ticks() as u64;
+        let loop_len = rate * seq.length as u64;
+        let pos = self.pos;
+        let boundary = match self.seq {
+            Seq::Stopped => None,
+            Seq::Armed => Some(if self.seen_tick { (pos / BAR + 1) * BAR } else { 0 }),
+            Seq::Playing(start) => {
+                let into = pos.saturating_sub(start) % loop_len;
+                // Just past the start of a loop still counts as that loop.
+                Some(if into <= rate / 2 {
+                    pos - into
+                } else {
+                    pos - into + loop_len
+                })
+            }
+        };
+        self.rec = match boundary {
+            None => Rec::Step { next: 0, count: 0 },
+            Some(boundary) => Rec::Live {
+                boundary,
+                from: boundary.saturating_sub(rate / 2),
+                to: boundary + loop_len - rate / 2,
+            },
+        };
+        self.refresh(Instant::now());
+    }
+
+    pub fn toggle_record(&mut self, out: &mut Vec<Gen>) {
+        let on = self.rec == Rec::Off;
+        self.record(on, out);
+    }
+
+    /// Step recording: leave the next step empty.
+    pub fn rest(&mut self, out: &mut Vec<Gen>) {
+        if let Rec::Step { next, count } = self.rec {
+            self.rec_steps[next] = Step {
+                on: false,
+                tie: false,
+                ..self.rec_steps[next]
+            };
+            self.advance_step_rec(next, count, out);
+        }
+    }
+
+    /// The result of recording, once per change.
+    pub fn take_recorded(&mut self) -> Option<Recorded> {
+        let done = self.recorded.take()?;
+        let (steps, length) = match self.rec {
+            Rec::Off => (self.settings.seq.steps.clone(), self.settings.seq.length),
+            Rec::Step { count, .. } => (self.rec_steps.clone(), count.max(1) as u8),
+            Rec::Live { .. } => (self.rec_steps.clone(), self.settings.seq.length),
+        };
+        Some(Recorded { steps, length, done })
+    }
+
+    fn rec_note(&mut self, channel: u8, note: u8, velocity: u8, pressed: bool, out: &mut Vec<Gen>) {
+        if pressed {
+            // The player hears what they record.
+            if let Some(i) = self.thru.iter().position(|&(c, n)| c == channel && n == note) {
+                self.thru.swap_remove(i);
+                out.push(Gen::Off { channel, note });
+            }
+            out.push(Gen::On {
+                channel,
+                note,
+                velocity: velocity.max(1),
+            });
+            if self.thru.len() < self.thru.capacity() {
+                self.thru.push((channel, note));
+            }
+        } else if let Some(i) = self.thru.iter().position(|&(c, n)| c == channel && n == note) {
+            self.thru.swap_remove(i);
+            out.push(Gen::Off { channel, note });
+        }
+
+        let offset = (note as i16 - self.settings.seq.root as i16).clamp(-48, 48) as i8;
+        match self.rec {
+            Rec::Off => {}
+            Rec::Step { next, count } => {
+                if pressed {
+                    self.rec_steps[next] = Step {
+                        on: true,
+                        offset,
+                        velocity: velocity.clamp(1, 127),
+                        gate: Step::default().gate,
+                        tie: false,
+                    };
+                    self.advance_step_rec(next, count, out);
+                }
+            }
+            Rec::Live { boundary, from, to } => {
+                let pos = self.pos;
+                if pressed {
+                    if !self.seen_tick || pos < from || pos >= to {
+                        return;
+                    }
+                    let rate = self.settings.seq.rate.ticks() as u64;
+                    let length = self.settings.seq.length as usize;
+                    let index = ((pos + rate / 2).saturating_sub(boundary) / rate) as usize;
+                    let index = index.min(length - 1);
+                    self.rec_steps[index] = Step {
+                        on: true,
+                        offset,
+                        velocity: velocity.clamp(1, 127),
+                        gate: 100,
+                        tie: false,
+                    };
+                    self.rec_set[index] = true;
+                    self.rec_open.retain(|&(n, _, _)| n != note);
+                    if self.rec_open.len() < self.rec_open.capacity() {
+                        self.rec_open.push((note, index, pos));
+                    }
+                    self.recorded = Some(false);
+                } else if let Some(i) = self.rec_open.iter().position(|&(n, _, _)| n == note) {
+                    let (_, index, at) = self.rec_open.swap_remove(i);
+                    self.close_live_note(index, at, pos);
+                }
+            }
+        }
+    }
+
+    fn advance_step_rec(&mut self, next: usize, count: usize, out: &mut Vec<Gen>) {
+        let next = next + 1;
+        self.rec = Rec::Step {
+            next,
+            count: count.max(next),
+        };
+        self.recorded = Some(false);
+        if next >= MAX_STEPS {
+            self.finish_rec(out);
+        }
+        self.refresh(Instant::now());
+    }
+
+    /// A key held from `at` to `end`: its step gets the length, longer notes tie into the next steps.
+    fn close_live_note(&mut self, index: usize, at: u64, end: u64) {
+        let rate = self.settings.seq.rate.ticks() as u64;
+        let length = self.settings.seq.length as usize;
+        let dur = end.saturating_sub(at).max(1);
+        let span = dur.div_ceil(rate) as usize;
+        self.recorded = Some(false);
+        let mut last = index;
+        for j in 1..span {
+            let i = index + j;
+            if i >= length || self.rec_set[i] {
+                // The loop ends, or a later key starts here: the note runs up to it.
+                self.rec_steps[last].gate = 100;
+                return;
+            }
+            self.rec_steps[i] = Step {
+                tie: true,
+                gate: 100,
+                ..self.rec_steps[index]
+            };
+            self.rec_set[i] = true;
+            last = i;
+        }
+        let rest = dur - (span as u64 - 1) * rate;
+        self.rec_steps[last].gate = (rest * 100 / rate).clamp(5, 100) as u8;
+    }
+
+    /// End recording and put the recorded steps into the settings.
+    fn finish_rec(&mut self, out: &mut Vec<Gen>) {
+        for (channel, note) in self.thru.drain(..) {
+            out.push(Gen::Off { channel, note });
+        }
+        let mut settings = (*self.settings).clone();
+        match self.rec {
+            Rec::Off => return,
+            Rec::Step { count, .. } => {
+                if count == 0 {
+                    self.rec = Rec::Off;
+                    return;
+                }
+                settings.seq.length = count as u8;
+            }
+            Rec::Live { boundary, .. } => {
+                let pos = self.pos;
+                while let Some((_, index, at)) = self.rec_open.pop() {
+                    self.close_live_note(index, at, pos);
+                }
+                if !self.rec_set.iter().any(|&b| b) {
+                    self.rec = Rec::Off;
+                    self.recorded = None;
+                    return;
+                }
+                // The part of the loop that went by is replaced, rests included.
+                let rate = self.settings.seq.rate.ticks() as u64;
+                let length = self.settings.seq.length as usize;
+                let covered = if pos + rate / 2 < boundary {
+                    0
+                } else {
+                    (((pos + rate / 2 - boundary) / rate) as usize + 1).min(length)
+                };
+                for i in 0..covered {
+                    if !self.rec_set[i] {
+                        self.rec_steps[i].on = false;
+                        self.rec_steps[i].tie = false;
+                    }
+                }
+            }
+        }
+        settings.seq.steps.clone_from(&self.rec_steps);
+        self.settings = Arc::new(settings);
+        self.rec = Rec::Off;
+        self.recorded = Some(true);
+    }
+
     /// Release everything and forget held keys.
     pub fn panic(&mut self, out: &mut Vec<Gen>) {
+        self.finish_rec(out);
         self.release_all(out);
         self.held.clear();
         self.order.clear();
@@ -262,6 +565,9 @@ impl PatternEngine {
     }
 
     fn release_all(&mut self, out: &mut Vec<Gen>) {
+        for (channel, note) in self.thru.drain(..) {
+            out.push(Gen::Off { channel, note });
+        }
         for s in self.sounding.drain(..) {
             out.push(Gen::Off {
                 channel: s.channel,
@@ -327,6 +633,7 @@ impl PatternEngine {
                 self.next_pos = Some(0);
                 self.index = 0;
                 if self.settings.mode == PatternMode::Seq && self.settings.seq.follow_transport {
+                    self.finish_rec(out);
                     self.release_all(out);
                     self.seq = Seq::Playing(0);
                 }
@@ -334,6 +641,7 @@ impl PatternEngine {
             ClockMsg::Continue => {}
             ClockMsg::Stop => {
                 if self.settings.mode == PatternMode::Seq && self.settings.seq.follow_transport {
+                    self.finish_rec(out);
                     self.seq = Seq::Stopped;
                     self.step = -1;
                 }
@@ -371,7 +679,16 @@ impl PatternEngine {
             beat: ((self.pos / PPQN) % 4) as u8,
             playing: matches!(self.seq, Seq::Playing(_)),
             armed: self.seq == Seq::Armed,
-            step: self.step,
+            step: match self.rec {
+                Rec::Step { next, .. } => next as i16,
+                _ => self.step,
+            },
+            rec: match self.rec {
+                Rec::Off => RecState::Off,
+                Rec::Step { .. } => RecState::Step,
+                Rec::Live { from, .. } if self.pos < from || !self.seen_tick => RecState::Waiting,
+                Rec::Live { .. } => RecState::Live,
+            },
         };
     }
 
@@ -517,6 +834,11 @@ impl PatternEngine {
         if self.seq == Seq::Armed && pos.is_multiple_of(BAR) {
             self.seq = Seq::Playing(pos);
         }
+        if let Rec::Live { to, .. } = self.rec {
+            if pos >= to {
+                self.finish_rec(out);
+            }
+        }
         let Seq::Playing(start) = self.seq else {
             return;
         };
@@ -527,6 +849,17 @@ impl PatternEngine {
         };
         let index = (n % seq.length as u64) as usize;
         self.step = index as i16;
+        if matches!(self.rec, Rec::Live { from, .. } if pos >= from) {
+            // Recording a loop: only the keys sound, the old steps are quiet.
+            let previous: Vec<Sounding> = self.sounding.drain(..).collect();
+            for s in previous {
+                out.push(Gen::Off {
+                    channel: s.channel,
+                    note: s.note,
+                });
+            }
+            return;
+        }
         let step = seq.steps[index];
         if !step.on {
             return;
@@ -619,9 +952,9 @@ mod tests {
     #[test]
     fn arp_up_on_sixteenths() {
         let mut e = engine(|s| s.mode = PatternMode::Arp);
-        e.note(0, 64, 100, true);
-        e.note(0, 60, 100, true);
-        e.note(0, 67, 100, true);
+        e.note(0, 64, 100, true, &mut Vec::new());
+        e.note(0, 60, 100, true, &mut Vec::new());
+        e.note(0, 67, 100, true, &mut Vec::new());
         let got = ons(&run(&mut e, Instant::now(), 0, 24));
         assert_eq!(got, [(0, 60), (6, 64), (12, 67), (18, 60)]);
     }
@@ -635,9 +968,9 @@ mod tests {
                 s.arp.octaves = octaves;
                 s.arp.rate = Rate::ThirtySecondTriplet;
             });
-            e.note(0, 64, 100, true);
-            e.note(0, 60, 100, true);
-            e.note(0, 67, 100, true);
+            e.note(0, 64, 100, true, &mut Vec::new());
+            e.note(0, 60, 100, true, &mut Vec::new());
+            e.note(0, 67, 100, true, &mut Vec::new());
             ons(&run(&mut e, Instant::now(), 0, 16))
                 .into_iter()
                 .map(|(_, n)| n)
@@ -665,7 +998,7 @@ mod tests {
             s.mode = PatternMode::Arp;
             s.arp.gate = 50;
         });
-        e.note(0, 60, 90, true);
+        e.note(0, 60, 90, true, &mut Vec::new());
         let ev = run(&mut e, Instant::now(), 0, 7);
         assert_eq!(
             ev,
@@ -690,7 +1023,7 @@ mod tests {
             ]
         );
         // Releasing the key stops new notes (no latch).
-        e.note(0, 60, 0, false);
+        e.note(0, 60, 0, false, &mut Vec::new());
         let ev = run(&mut e, Instant::now(), 7, 12);
         assert_eq!(ons(&ev), []);
         assert!(
@@ -705,10 +1038,10 @@ mod tests {
             s.mode = PatternMode::Arp;
             s.arp.latch = true;
         });
-        e.note(0, 60, 100, true);
-        e.note(0, 60, 0, false);
+        e.note(0, 60, 100, true, &mut Vec::new());
+        e.note(0, 60, 0, false, &mut Vec::new());
         assert_eq!(ons(&run(&mut e, Instant::now(), 0, 12)).len(), 2);
-        e.note(0, 72, 100, true);
+        e.note(0, 72, 100, true, &mut Vec::new());
         let got: Vec<u8> = ons(&run(&mut e, Instant::now(), 12, 12))
             .into_iter()
             .map(|(_, n)| n)
@@ -723,7 +1056,7 @@ mod tests {
             s.arp.swing = 50;
             s.arp.rate = Rate::Eighth; // 12 ticks; swing 50 % → 3 ticks
         });
-        e.note(0, 60, 100, true);
+        e.note(0, 60, 100, true, &mut Vec::new());
         let got: Vec<u64> = ons(&run(&mut e, Instant::now(), 0, 48))
             .into_iter()
             .map(|(k, _)| k)
@@ -786,7 +1119,7 @@ mod tests {
         let mut out = Vec::new();
         e.clock(ClockOrigin::Input, ClockMsg::Start, t0, &mut out);
         assert!(e.transport().playing, "MIDI Start starts it right away");
-        e.note(2, 62, 100, true);
+        e.note(2, 62, 100, true, &mut Vec::new());
         let ev = run(&mut e, t0, 0, 25);
         assert_eq!(
             ons(&ev),
@@ -824,7 +1157,7 @@ mod tests {
             s.clock.internal_fallback = true;
             s.clock.bpm = 100.0;
         });
-        e.note(0, 60, 100, true);
+        e.note(0, 60, 100, true, &mut Vec::new());
         let t0 = Instant::now();
         let mut out = Vec::new();
         e.clock(ClockOrigin::Internal, ClockMsg::Tick, t0, &mut out);
@@ -864,7 +1197,7 @@ mod tests {
     #[test]
     fn switching_mode_releases_sounding_notes() {
         let mut e = engine(|s| s.mode = PatternMode::Arp);
-        e.note(0, 60, 100, true);
+        e.note(0, 60, 100, true, &mut Vec::new());
         run(&mut e, Instant::now(), 0, 1);
         let mut out = Vec::new();
         let mut off = PatternSettings::default();
@@ -872,5 +1205,101 @@ mod tests {
         e.set_settings(Arc::new(off), &mut out);
         assert_eq!(out, [Gen::Off { channel: 0, note: 60 }]);
         assert!(!e.active());
+    }
+
+    #[test]
+    fn step_recording_fills_steps_one_key_at_a_time() {
+        let mut e = engine(|s| {
+            s.mode = PatternMode::Seq;
+            s.seq.root = 60;
+        });
+        let mut out = Vec::new();
+        e.record(true, &mut out);
+        assert_eq!(e.transport().rec, RecState::Step);
+        assert_eq!(e.transport().step, 0);
+        e.note(0, 60, 90, true, &mut out);
+        assert_eq!(
+            out,
+            [Gen::On {
+                channel: 0,
+                note: 60,
+                velocity: 90
+            }],
+            "heard while recording"
+        );
+        e.note(0, 60, 0, false, &mut out);
+        e.rest(&mut out);
+        e.note(0, 67, 70, true, &mut out);
+        e.note(0, 67, 0, false, &mut out);
+        assert_eq!(e.transport().step, 3);
+        let progress = e.take_recorded().unwrap();
+        assert!(!progress.done);
+        assert_eq!(progress.length, 3);
+        e.record(false, &mut out);
+        let r = e.take_recorded().unwrap();
+        assert!(r.done);
+        assert_eq!(r.length, 3);
+        assert_eq!(
+            (r.steps[0].on, r.steps[0].offset, r.steps[0].velocity),
+            (true, 0, 90)
+        );
+        assert!(!r.steps[1].on, "rest");
+        assert_eq!((r.steps[2].on, r.steps[2].offset), (true, 7));
+        assert_eq!(e.transport().rec, RecState::Off);
+
+        // Plays back what was recorded.
+        e.play(true, &mut out);
+        let got = ons(&run(&mut e, Instant::now(), 0, 13));
+        assert_eq!(got, [(0, 60), (12, 67)]);
+    }
+
+    #[test]
+    fn live_recording_takes_one_loop_quantised_to_the_steps() {
+        let mut e = engine(|s| {
+            s.mode = PatternMode::Seq;
+            s.seq.follow_transport = false;
+            s.seq.length = 4;
+            s.seq.root = 48;
+        });
+        let t0 = Instant::now();
+        let mut out = Vec::new();
+        e.play(true, &mut out);
+        run(&mut e, t0, 0, 5); // playing from tick 0, now at tick 4
+        e.record(true, &mut out);
+        assert_eq!(
+            e.transport().rec,
+            RecState::Waiting,
+            "waits for the next loop at tick 24"
+        );
+        // A key one tick early belongs to step 1 of the loop; held for 2 steps.
+        run(&mut e, t0, 5, 18); // now at tick 22
+        let mut out = Vec::new();
+        e.note(0, 55, 100, true, &mut out);
+        assert!(out.contains(&Gen::On {
+            channel: 0,
+            note: 55,
+            velocity: 100
+        }));
+        assert_eq!(e.transport().rec, RecState::Live);
+        let ev = run(&mut e, t0, 23, 11); // now at tick 33
+        assert!(ons(&ev).is_empty(), "the old steps are quiet while recording");
+        e.note(0, 55, 0, false, &mut Vec::new()); // held 11 ticks: steps 1 and 2 (tied)
+        run(&mut e, t0, 34, 2); // tick 35
+        e.note(0, 50, 80, true, &mut Vec::new()); // step 3 (tick 36 is closest)
+        run(&mut e, t0, 36, 2);
+        e.note(0, 50, 0, false, &mut Vec::new());
+        run(&mut e, t0, 38, 10); // loop ends at tick 45
+        assert_eq!(e.transport().rec, RecState::Off, "one loop, then done");
+        let r = e.take_recorded().unwrap();
+        assert!(r.done);
+        let s = &r.steps;
+        assert_eq!((s[0].on, s[0].offset, s[0].tie), (true, 7, false));
+        assert_eq!((s[1].on, s[1].tie), (true, true));
+        assert_eq!((s[2].on, s[2].offset, s[2].velocity), (true, 2, 80));
+        assert_eq!(s[2].gate, 33, "held a third of a step");
+        assert!(!s[3].on, "nothing played there: a rest");
+        // The next loop plays the recording.
+        let got = ons(&run(&mut e, t0, 48, 24));
+        assert_eq!(got, [(48, 55), (60, 50)]);
     }
 }

@@ -83,6 +83,28 @@ export interface Snapshot {
   learning: number | null;
   /** Last MIDI Learn result. `seq` grows with every result, so a new one can be told apart. */
   learned: Learned | null;
+  /** Arpeggiator / sequencer action waiting for MIDI Learn, or null. */
+  pattern_learning: PatternAction | null;
+  pattern_learned: PatternLearned | null;
+  /** The pattern mode playing now. MIDI can switch it for the session; the project keeps its own. */
+  pattern_mode: PatternMode;
+  /** Last recording result: put into the project when `seq` is new. */
+  seq_recorded: SeqRecorded | null;
+}
+
+export interface PatternLearned {
+  seq: number;
+  action: PatternAction;
+  trigger: MidiTrigger;
+}
+
+export interface SeqRecorded {
+  seq: number;
+  /** All MAX_STEPS steps. */
+  steps: Step[];
+  length: number;
+  /** Recording ended; otherwise more results follow. */
+  done: boolean;
 }
 
 export interface Learned {
@@ -313,12 +335,24 @@ export interface SeqSettings {
   steps: Step[];
 }
 
+/** Something a MIDI message can do to the arpeggiator / sequencer. */
+export type PatternAction = 'off' | 'arp' | 'seq' | 'next_mode' | 'play' | 'record' | 'rest';
+
+export const PATTERN_ACTIONS: PatternAction[] = ['off', 'arp', 'seq', 'next_mode', 'play', 'record', 'rest'];
+
+/** A Note On, a CC rising to 64 or more, or a Program Change fires the action. Missing: no trigger. */
+export type PatternTriggers = Partial<Record<PatternAction, MidiTrigger>>;
+
 export interface PatternSettings {
   mode: PatternMode;
   clock: ClockSettings;
   arp: ArpSettings;
   seq: SeqSettings;
+  midi: PatternTriggers;
 }
+
+/** Recording into the sequencer: step by step, waiting for the loop start, or one live loop. */
+export type RecState = 'off' | 'step' | 'waiting' | 'live';
 
 /** Clock and sequencer state. Sent with `keys`, so up to once per display frame while playing. */
 export interface Transport {
@@ -332,8 +366,9 @@ export interface Transport {
   playing: boolean;
   /** The sequencer waits for the next bar to start. */
   armed: boolean;
-  /** Current sequencer step, -1 when not playing. */
+  /** Current sequencer step, -1 when not playing. While step recording: the step the next key fills. */
   step: number;
+  rec: RecState;
 }
 
 export interface RecentFile {
@@ -456,7 +491,15 @@ export type EngineCmd =
   /** MIDI Learn for a custom control; `index: null` cancels. The result arrives as `Snapshot.learned`. */
   | { type: 'midi_learn'; index: number | null }
   /** Sequencer Play (starts on the next bar line of the clock) or Stop. */
-  | { type: 'seq_play'; on: boolean };
+  | { type: 'seq_play'; on: boolean }
+  /** Record: stopped, keys fill the steps one by one; playing, one loop is recorded live. */
+  | { type: 'seq_record'; on: boolean }
+  /** Step recording: leave the next step empty. */
+  | { type: 'seq_rest' }
+  /** Switch the pattern mode now (the project edit is sent as well). */
+  | { type: 'set_pattern_mode'; mode: PatternMode }
+  /** MIDI Learn for a pattern action; `action: null` cancels. The result arrives as `Snapshot.pattern_learned`. */
+  | { type: 'pattern_learn'; action: PatternAction | null };
 
 // ---------------------------------------------------------------------------
 // Transport

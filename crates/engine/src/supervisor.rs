@@ -15,18 +15,19 @@ use rosc::OscType;
 use crate::command::{self, Command};
 use crate::midi::clock::InternalClock;
 use crate::midi::forwarder::{self, FwdMsg};
-use crate::midi::mapping::{ControlEvent, Mapping};
-use crate::midi::pattern::{ClockMsg, ClockOrigin};
+use crate::midi::mapping::{ControlEvent, LearnTarget, Mapping};
+use crate::midi::pattern::{ClockMsg, ClockOrigin, Recorded};
 use crate::midi::ports::{self, Scanner};
 use crate::midi::MidiBytes;
 use crate::mqtt::topics::custom_payload;
 use crate::mqtt::{MqttEvent, MqttHandle};
 use crate::osc::listener::{build_routes, ListenerHandle, Routes};
 use crate::osc::out::OscOut;
+use crate::project::{PatternAction, PatternMode};
 use crate::project::{Project, ValueType};
 use crate::state::{
-    now_ms, EngineEvent, Learned, Level, MidiConnState, MidiStatus, MqttConnState, PortInfo, ServiceState,
-    Shared,
+    now_ms, EngineEvent, Learned, Level, MidiConnState, MidiStatus, MqttConnState, PatternLearned, PortInfo,
+    SeqRecorded, ServiceState, Shared,
 };
 use crate::{EngineCmd, Source};
 
@@ -75,6 +76,9 @@ pub(crate) struct Supervisor {
     custom_dirty: Vec<bool>,
     custom_flush_at: Option<Instant>,
     learn_seq: u64,
+    /// The pattern mode playing now (MIDI can change it for the session).
+    pattern_mode: PatternMode,
+    record_seq: u64,
 
     /// Last overall health announced in the log: `Some(true)` = "Connections active".
     health: Option<bool>,
@@ -116,6 +120,8 @@ impl Supervisor {
             custom_dirty: Vec::new(),
             custom_flush_at: None,
             learn_seq: 0,
+            pattern_mode: PatternMode::Off,
+            record_seq: 0,
             health: None,
         }
     }
@@ -157,14 +163,24 @@ impl Supervisor {
             EngineCmd::SetMqttEnabled(on) => self.set_mqtt_enabled(on),
             EngineCmd::CustomOsc { index, value, source } => self.custom_osc(index, value, source),
             EngineCmd::MidiLearn(index) => self.midi_learn(index),
+            EngineCmd::PatternLearn(action) => self.pattern_learn(action),
             EngineCmd::SeqPlay(on) => {
                 let _ = self.fwd_tx.send(FwdMsg::SeqPlay(on));
             }
-            EngineCmd::MidiControl { generation, event } => {
-                if generation == self.mapping_generation {
-                    self.midi_control(event);
-                }
+            EngineCmd::SeqRecord(on) => {
+                let _ = self.fwd_tx.send(FwdMsg::SeqRecord(on));
             }
+            EngineCmd::SeqRest => {
+                let _ = self.fwd_tx.send(FwdMsg::SeqRest);
+            }
+            EngineCmd::SetPatternMode(mode, source) => self.set_pattern_mode(mode, source),
+            EngineCmd::SeqRecorded(recorded) => self.seq_recorded(recorded),
+            EngineCmd::MidiControl { generation, event } => match event {
+                ControlEvent::Pattern(action) => self.pattern_action(action),
+                ControlEvent::PatternLearned { .. } => self.midi_control(event),
+                _ if generation == self.mapping_generation => self.midi_control(event),
+                _ => {}
+            },
             EngineCmd::Console(line) => self.console(&line),
             EngineCmd::Log(level, text) => self.shared.log(level, text),
             EngineCmd::ClearLog => self.shared.clear_log(),
@@ -365,13 +381,125 @@ impl Supervisor {
                     s.learned = Some(Learned { seq, index, trigger });
                 });
             }
+            ControlEvent::PatternLearned { action, trigger } => {
+                self.learn_seq += 1;
+                let seq = self.learn_seq;
+                self.shared.update(|s| {
+                    s.pattern_learning = None;
+                    s.pattern_learned = Some(PatternLearned { seq, action, trigger });
+                });
+            }
+            ControlEvent::Pattern(action) => self.pattern_action(action),
         }
     }
 
     fn midi_learn(&mut self, index: Option<usize>) {
         let index = index.filter(|i| *i < self.project.osc.sending_addresses.len());
-        let _ = self.fwd_tx.send(FwdMsg::Learn(index));
-        self.shared.update(|s| s.learning = index);
+        let _ = self.fwd_tx.send(FwdMsg::Learn(index.map(LearnTarget::Control)));
+        self.shared.update(|s| {
+            s.learning = index;
+            s.pattern_learning = None;
+        });
+    }
+
+    fn pattern_learn(&mut self, action: Option<PatternAction>) {
+        let _ = self.fwd_tx.send(FwdMsg::Learn(action.map(LearnTarget::Pattern)));
+        self.shared.update(|s| {
+            s.pattern_learning = action;
+            s.learning = None;
+        });
+    }
+
+    // -- Arpeggiator / sequencer ----------------------------------------------
+
+    /// A mode trigger fired (Play, Record and Rest are handled in the forwarder).
+    fn pattern_action(&mut self, action: PatternAction) {
+        let mode = match action {
+            PatternAction::Off => PatternMode::Off,
+            PatternAction::Arp => PatternMode::Arp,
+            PatternAction::Seq => PatternMode::Seq,
+            PatternAction::NextMode => match self.pattern_mode {
+                PatternMode::Off => PatternMode::Arp,
+                PatternMode::Arp => PatternMode::Seq,
+                PatternMode::Seq => PatternMode::Off,
+            },
+            PatternAction::Play => {
+                let t = self.shared.transport();
+                let _ = self.fwd_tx.send(FwdMsg::SeqPlay(!(t.playing || t.armed)));
+                return;
+            }
+            PatternAction::Record => {
+                let on = self.shared.transport().rec == crate::midi::pattern::RecState::Off;
+                let _ = self.fwd_tx.send(FwdMsg::SeqRecord(on));
+                return;
+            }
+            PatternAction::Rest => {
+                let _ = self.fwd_tx.send(FwdMsg::SeqRest);
+                return;
+            }
+        };
+        self.set_pattern_mode(mode, Source::Midi);
+    }
+
+    /// Session pattern mode. The project keeps its own until the UI changes it.
+    fn set_pattern_mode(&mut self, mode: PatternMode, source: Source) {
+        if mode == self.pattern_mode {
+            return;
+        }
+        self.pattern_mode = mode;
+        if source != Source::Ui {
+            self.shared.info(format!("[PATTERN] Mode: {}", mode_name(mode)));
+        }
+        self.apply_pattern(true);
+        // The clock device follows the mode.
+        self.conn_clock = None;
+        self.clock_error.clear();
+        self.reconcile_midi();
+    }
+
+    /// Send the pattern settings (with the session mode) to the forwarder and
+    /// run the internal clock while a mode is on.
+    fn apply_pattern(&mut self, send: bool) {
+        if send {
+            let mut settings = self.project.pattern.clone();
+            settings.mode = self.pattern_mode;
+            let _ = self.fwd_tx.send(FwdMsg::SetPattern(Arc::new(settings)));
+        }
+        let mode = self.pattern_mode;
+        self.shared.update(|s| s.pattern_mode = mode);
+        let wants_internal = mode != PatternMode::Off;
+        let bpm = self.project.pattern.clock.bpm;
+        match (&self.internal_clock, wants_internal) {
+            (Some(clock), true) => clock.set_bpm(bpm),
+            (None, true) => {
+                // Runs whenever a pattern mode is on: the ticks either play
+                // (fallback) or just keep the clock display up to date.
+                self.internal_clock = Some(InternalClock::start(bpm, self.fwd_tx.clone()));
+            }
+            (Some(_), false) => {
+                if let Some(clock) = self.internal_clock.take() {
+                    clock.stop();
+                }
+            }
+            (None, false) => {}
+        }
+    }
+
+    fn seq_recorded(&mut self, recorded: Recorded) {
+        self.record_seq += 1;
+        let seq = self.record_seq;
+        if recorded.done {
+            self.shared
+                .debug_log(|| "[PATTERN] Recording finished".to_string());
+        }
+        self.shared.update(|s| {
+            s.seq_recorded = Some(SeqRecorded {
+                seq,
+                steps: recorded.steps,
+                length: recorded.length,
+                done: recorded.done,
+            })
+        });
     }
 
     // -- Console --------------------------------------------------------------
@@ -455,31 +583,24 @@ impl Supervisor {
             self.in_error.clear();
         }
 
-        // Arpeggiator / sequencer and their clock.
-        if load || old.pattern != new.pattern {
+        // Arpeggiator / sequencer and their clock. A mode chosen in the
+        // project replaces one switched by MIDI.
+        let mode_changed = load || old.pattern.mode != new.pattern.mode;
+        if mode_changed {
+            self.pattern_mode = new.pattern.mode;
+        }
+        self.apply_pattern(load || old.pattern != new.pattern);
+        if old.pattern.midi != new.pattern.midi || load {
             let _ = self
                 .fwd_tx
-                .send(FwdMsg::SetPattern(Arc::new(new.pattern.clone())));
+                .send(FwdMsg::SetPatternMappings(new.pattern.midi.list().into()));
         }
-        let wants_internal = new.pattern.mode != crate::project::PatternMode::Off;
-        match (&self.internal_clock, wants_internal) {
-            (Some(clock), true) => clock.set_bpm(new.pattern.clock.bpm),
-            (None, true) => {
-                // Runs whenever a pattern mode is on: the ticks either play
-                // (fallback) or just keep the clock display up to date.
-                self.internal_clock = Some(InternalClock::start(new.pattern.clock.bpm, self.fwd_tx.clone()));
-            }
-            (Some(_), false) => {
-                if let Some(clock) = self.internal_clock.take() {
-                    clock.stop();
-                }
-            }
-            (None, false) => {}
+        if load {
+            self.shared.update(|s| s.pattern_learning = None);
         }
-        if load
+        if mode_changed
             || old.pattern.clock.device != new.pattern.clock.device
             || old.pattern.clock.source != new.pattern.clock.source
-            || old.pattern.mode != new.pattern.mode
         {
             self.conn_clock = None;
             self.clock_error.clear();
@@ -828,7 +949,7 @@ impl Supervisor {
         }
 
         // Clock device: only while a pattern mode uses it.
-        let clock_wanted = (project.pattern.mode != crate::project::PatternMode::Off
+        let clock_wanted = (self.pattern_mode != PatternMode::Off
             && project.pattern.clock.source == crate::project::ClockSource::Device)
             .then_some(project.pattern.clock.device.as_ref())
             .flatten();
@@ -915,7 +1036,7 @@ impl Supervisor {
             self.conn_out.as_ref(),
             &self.out_error,
         );
-        let clock_wanted = (self.project.pattern.mode != crate::project::PatternMode::Off
+        let clock_wanted = (self.pattern_mode != PatternMode::Off
             && self.project.pattern.clock.source == crate::project::ClockSource::Device)
             .then_some(self.project.pattern.clock.device.as_ref())
             .flatten();
@@ -980,5 +1101,13 @@ impl Supervisor {
         if let Some(mqtt) = self.mqtt.take() {
             mqtt.stop();
         }
+    }
+}
+
+fn mode_name(mode: PatternMode) -> &'static str {
+    match mode {
+        PatternMode::Off => "off",
+        PatternMode::Arp => "arpeggiator",
+        PatternMode::Seq => "sequencer",
     }
 }

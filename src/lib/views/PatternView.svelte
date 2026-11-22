@@ -5,10 +5,11 @@
   import { t } from '../i18n/i18n.svelte';
   import type { PatternMode } from '../ipc';
   import PatternPanels from '../components/PatternPanels.svelte';
+  import PatternTriggers from '../components/PatternTriggers.svelte';
   import Segmented from '../components/Segmented.svelte';
 
-  const pat = $derived(app.project.pattern);
-  const now = () => app.touch(true);
+  // The mode playing now: MIDI can switch it for the session.
+  const mode = $derived(app.patternMode);
 
   const modes = $derived<{ value: PatternMode; label: string }[]>([
     { value: 'off', label: t('pattern.modeOff') },
@@ -16,7 +17,7 @@
     { value: 'seq', label: t('pattern.modeSeq') },
   ]);
   const explain = $derived(
-    pat.mode === 'arp' ? t('pattern.explainArp') : pat.mode === 'seq' ? t('pattern.explainSeq') : t('pattern.explainOff'),
+    mode === 'arp' ? t('pattern.explainArp') : mode === 'seq' ? t('pattern.explainSeq') : t('pattern.explainOff'),
   );
 </script>
 
@@ -32,17 +33,16 @@
       <Segmented
         label={t('pattern.mode')}
         options={modes}
-        value={pat.mode}
-        onchange={(v) => {
-          pat.mode = v;
-          now();
-        }}
+        value={mode}
+        onchange={(v) => app.setPatternMode(v)}
       />
     </div>
     <p class="explain">{explain}</p>
   </section>
 
   <PatternPanels />
+
+  <PatternTriggers />
 </div>
 
 <style>

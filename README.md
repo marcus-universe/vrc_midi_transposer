@@ -20,7 +20,7 @@ VRC MIDI Transposer transposes MIDI in real time between two devices, mirrors th
 - 🎮 **VRChat OSC** in both directions: control transposition from VRChat and drive an avatar piano ([OSC_PARAMETERS.md](docs/OSC_PARAMETERS.md))
 - 🎚️ **Custom controls** for any avatar parameter, switched or moved from the app, Home Assistant or your MIDI keyboard and knobs, with MIDI Learn
 - 🎼 **Live keyboard** that shades each key by how hard you played it, plus pitch and mod wheel displays
-- 🔁 **Arpeggiator and step sequencer** locked to the MIDI clock of your input or another device (or an internal tempo), with 9 arp styles, rates from 1/1 to 1/32 incl. dotted and triplets, and a sequencer that starts on the next bar ([ARP_SEQUENCER.md](docs/ARP_SEQUENCER.md))
+- 🔁 **Arpeggiator and step sequencer** locked to the MIDI clock of your input or another device (or an internal tempo), with 9 arp styles, rates from 1/1 to 1/32 incl. dotted and triplets, a sequencer that starts on the next bar, step and live recording, and MIDI triggers for mode, Play and Record ([ARP_SEQUENCER.md](docs/ARP_SEQUENCER.md))
 - 🏠 **Home Assistant over MQTT** with automatic discovery, including your own custom avatar controls
 - 💾 **Project files** (`.vrcmt`): save complete setups anywhere, open them with a double-click, share them without your MQTT password
 - 🔄 **In-app updates** on Windows, macOS and AppImage
@@ -79,7 +79,7 @@ If your project has unsaved changes, the app asks to save them before it install
 ## Documentation
 
 - **[Projects and settings](docs/PROJECTS.md)**: project files, what a project contains, app settings and language, opening a `config.json`, headless mode
-- **[Arpeggiator and sequencer](docs/ARP_SEQUENCER.md)**: modes, clock sources, arp styles and rates, the step sequencer
+- **[Arpeggiator and sequencer](docs/ARP_SEQUENCER.md)**: modes, clock sources, arp styles and rates, the step sequencer, recording, MIDI control
 - **[Control commands](docs/CONTROL_COMMANDS.md)**: every console command, OSC path and MQTT topic, and MIDI triggers for custom controls
 - **[OSC parameters](docs/OSC_PARAMETERS.md)**: what is sent to VRChat
 - **[VRChat avatar setup](docs/AVATAR_SETUP.md)**: building an avatar piano

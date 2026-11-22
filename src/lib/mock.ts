@@ -34,15 +34,20 @@ import type {
   LogLine,
   MidiStatus,
   MidiTrigger,
+  PatternAction,
+  PatternLearned,
   PortInfo,
   PortRef,
   Project,
   ProjectState,
   RecentFile,
+  SeqRecorded,
   Snapshot,
+  Step,
   Transport,
   UpdateInfo,
 } from './ipc';
+import { PATTERN_ACTIONS } from './ipc';
 
 const BANNER = String.raw` _  _  ____   ___
 ╱ )( ╲(  _ ╲ ╱ __)     ▓▓╦▓▓▓╦▓▓▓╦▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
@@ -197,6 +202,9 @@ const session = {
   last_command_ts: 0,
   learning: null as number | null,
   learned: null as Learned | null,
+  pattern_learning: null as PatternAction | null,
+  pattern_learned: null as PatternLearned | null,
+  seq_recorded: null as SeqRecorded | null,
 };
 
 let logs: LogLine[] = [];
@@ -401,6 +409,10 @@ function snapshot(): Snapshot {
     },
     learning: session.learning,
     learned: session.learned ? clone(session.learned) : null,
+    pattern_learning: session.pattern_learning,
+    pattern_learned: session.pattern_learned ? clone(session.pattern_learned) : null,
+    pattern_mode: working.pattern.mode,
+    seq_recorded: session.seq_recorded ? clone(session.seq_recorded) : null,
   };
 }
 
@@ -577,8 +589,40 @@ function engine(cmd: EngineCmd) {
         pushSnapshot();
       }, 1500);
       break;
+    case 'set_pattern_mode':
+      if (working.pattern.mode !== cmd.mode) {
+        working.pattern.mode = cmd.mode;
+        stopSequencer();
+        updateClock();
+      }
+      break;
+    case 'pattern_learn':
+      clearTimeout(learnTimer);
+      session.learning = null;
+      session.pattern_learning = cmd.action;
+      if (cmd.action === null) break;
+      learnTimer = setTimeout(() => {
+        const action = session.pattern_learning;
+        if (action === null) return;
+        const trigger: MidiTrigger = { kind: 'cc', channel: 1, number: 80 + PATTERN_ACTIONS.indexOf(action), mode: 'toggle', forward: false };
+        session.pattern_learning = null;
+        session.pattern_learned = { seq: (session.pattern_learned?.seq ?? 0) + 1, action, trigger };
+        log('success', `MIDI Learn: CC ${trigger.number} for ${action}`);
+        pushSnapshot();
+      }, 1500);
+      break;
+    case 'seq_record':
+      if (working.pattern.mode !== 'seq') break;
+      if (cmd.on && transport.rec === 'off') startRecording();
+      else if (!cmd.on) finishRecording();
+      pushKeys();
+      break;
+    case 'seq_rest':
+      if (transport.rec === 'step') stepRecord(null);
+      break;
     case 'seq_play':
       if (working.pattern.mode !== 'seq') break;
+      if (transport.rec === 'step') finishRecording();
       if (cmd.on && !transport.playing && !transport.armed) {
         transport.armed = true;
         log('info', 'Sequencer starts on the next bar');
@@ -590,6 +634,61 @@ function engine(cmd: EngineCmd) {
       break;
   }
   pushSnapshot();
+}
+
+// --- Recording: the "user" plays a few notes ---------------------------------
+
+let recSteps: Step[] = [];
+let recCount = 0;
+let recTimer: ReturnType<typeof setInterval> | undefined;
+let recLoopStart = 0;
+
+function startRecording() {
+  recSteps = clone(working.pattern.seq.steps);
+  recCount = 0;
+  if (transport.playing || transport.armed) {
+    transport.rec = 'waiting';
+    log('info', 'Recording starts with the next loop');
+  } else {
+    transport.rec = 'step';
+    transport.step = 0;
+    log('info', 'Step recording: every key fills the next step');
+    // Pretend keys are pressed now and then.
+    recTimer = setInterval(() => stepRecord(Math.floor(Math.random() * 13)), 900);
+  }
+}
+
+function stepRecord(offset: number | null) {
+  if (transport.rec !== 'step') return;
+  const i = transport.step;
+  recSteps[i] = { on: offset !== null, offset: offset ?? recSteps[i].offset, velocity: 100, gate: 50, tie: false };
+  recCount = Math.max(recCount, i + 1);
+  transport.step = i + 1;
+  publishRecording(false);
+  if (transport.step >= 64) finishRecording();
+  pushKeys();
+}
+
+function publishRecording(done: boolean) {
+  const length = transport.rec === 'step' ? Math.max(recCount, 1) : working.pattern.seq.length;
+  session.seq_recorded = { seq: (session.seq_recorded?.seq ?? 0) + 1, steps: clone(recSteps), length, done };
+  pushSnapshot();
+}
+
+function finishRecording() {
+  clearInterval(recTimer);
+  recTimer = undefined;
+  if (transport.rec === 'off') return;
+  const wasStep = transport.rec === 'step';
+  const any = wasStep ? recCount > 0 : transport.rec === 'live';
+  if (any) {
+    if (wasStep) working.pattern.seq.length = recCount;
+    working.pattern.seq.steps = clone(recSteps);
+    publishRecording(true);
+  }
+  transport.rec = 'off';
+  if (wasStep) transport.step = -1;
+  log('info', 'Recording finished');
 }
 
 /** What "the user played" during MIDI Learn: a different message per control. */
@@ -788,6 +887,7 @@ function updateClock() {
 }
 
 function stopSequencer() {
+  finishRecording();
   transport.playing = false;
   transport.armed = false;
   transport.step = -1;
@@ -832,12 +932,24 @@ function onClockTick(): boolean {
       const step = Math.floor((clockTick - playStart) / rateTicks(pat.seq.rate)) % len;
       if (step !== transport.step) {
         transport.step = step;
-        const s = pat.seq.steps[step];
-        const base = lastPressed !== null && inputNotes.has(lastPressed) ? lastPressed : pat.seq.root;
-        if (!s.tie) {
+        if (transport.rec === 'waiting' && step === 0) {
+          transport.rec = 'live';
+          recLoopStart = clockTick;
+        } else if (transport.rec === 'live' && step === 0 && clockTick > recLoopStart) {
+          finishRecording();
+        }
+        if (transport.rec === 'live') {
+          const played = Math.random() < 0.6;
+          recSteps[step] = { on: played, offset: Math.floor(Math.random() * 13), velocity: 100, gate: 60, tie: false };
           genNotes.clear();
-          const n = base + s.offset;
-          if (s.on && n >= 0 && n <= 127) genNotes.set(n, s.velocity);
+        } else {
+          const s = pat.seq.steps[step];
+          const base = lastPressed !== null && inputNotes.has(lastPressed) ? lastPressed : pat.seq.root;
+          if (!s.tie) {
+            genNotes.clear();
+            const n = base + s.offset;
+            if (s.on && n >= 0 && n <= 127) genNotes.set(n, s.velocity);
+          }
         }
         changed = true;
       }
@@ -937,6 +1049,7 @@ export async function mockSubscribe(onFrame: (frame: Frame) => void): Promise<In
   }
   updateClock();
   if (params.get('play') === '1' && working.pattern.mode === 'seq' && !transport.playing) transport.armed = true;
+  if (params.get('rec') === 'step' && working.pattern.mode === 'seq') startRecording();
 
   return {
     ...state(),

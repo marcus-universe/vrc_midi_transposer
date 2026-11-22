@@ -20,9 +20,11 @@ use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use transposer_engine::headless::{documents_dir, legacy_config_dirs};
-use transposer_engine::project::{file_name_for, is_project_path, Project, RecentFile, Store, EXTENSION};
+use transposer_engine::project::{
+    file_name_for, is_project_path, PatternAction, PatternMode, Project, RecentFile, Store, EXTENSION,
+};
 use transposer_engine::{
-    info, ClockState, Engine, EngineCmd, EngineEvent, Level, LogLine, Snapshot, Source, Transport,
+    info, ClockState, Engine, EngineCmd, EngineEvent, Level, LogLine, RecState, Snapshot, Source, Transport,
 };
 
 /// Events are collected for this long before one frame is sent to the webview.
@@ -62,8 +64,10 @@ pub struct TransportView {
     playing: bool,
     /// Waiting for the next bar to start.
     armed: bool,
-    /// Current sequencer step, -1 when not playing.
+    /// Current sequencer step, -1 when not playing. While step recording: the step the next key fills.
     step: i16,
+    /// Recording: `off`, `step`, `waiting` (for the loop start) or `live`.
+    rec: &'static str,
 }
 
 impl From<Transport> for TransportView {
@@ -79,6 +83,12 @@ impl From<Transport> for TransportView {
             playing: t.playing,
             armed: t.armed,
             step: t.step,
+            rec: match t.rec {
+                RecState::Off => "off",
+                RecState::Step => "step",
+                RecState::Waiting => "waiting",
+                RecState::Live => "live",
+            },
         }
     }
 }
@@ -266,6 +276,20 @@ pub enum UiCmd {
     /// Start (on the next bar) or stop the sequencer.
     SeqPlay {
         on: bool,
+    },
+    /// Start or end recording into the sequencer.
+    SeqRecord {
+        on: bool,
+    },
+    /// Step recording: leave the next step empty.
+    SeqRest,
+    /// Switch the pattern mode now (the project edit is sent separately).
+    SetPatternMode {
+        mode: PatternMode,
+    },
+    /// MIDI Learn for an arpeggiator / sequencer action; `action: null` cancels.
+    PatternLearn {
+        action: Option<PatternAction>,
     },
 }
 
@@ -669,6 +693,10 @@ fn engine_cmd(state: State<AppState>, cmd: UiCmd) {
         UiCmd::Panic => EngineCmd::Panic,
         UiCmd::MidiLearn { index } => EngineCmd::MidiLearn(index),
         UiCmd::SeqPlay { on } => EngineCmd::SeqPlay(on),
+        UiCmd::SeqRecord { on } => EngineCmd::SeqRecord(on),
+        UiCmd::SeqRest => EngineCmd::SeqRest,
+        UiCmd::SetPatternMode { mode } => EngineCmd::SetPatternMode(mode, Source::Ui),
+        UiCmd::PatternLearn { action } => EngineCmd::PatternLearn(action),
     });
 }
 

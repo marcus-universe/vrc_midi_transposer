@@ -13,11 +13,11 @@ use std::time::Instant;
 use midir::MidiOutputConnection;
 
 use super::held_notes::{transposed, HeldNotes};
-use super::mapping::{ControlEvent, Mapping, Mappings};
-use super::pattern::{ClockMsg, ClockOrigin, Gen, PatternEngine, Transport};
+use super::mapping::{ControlEvent, LearnTarget, Mapping, Mappings};
+use super::pattern::{ClockMsg, ClockOrigin, Gen, PatternEngine, Recorded, Transport};
 use super::MidiBytes;
 use crate::osc::out::OscOut;
-use crate::project::PatternSettings;
+use crate::project::{MidiTrigger, PatternAction, PatternSettings};
 use crate::state::Shared;
 use crate::EngineCmd;
 
@@ -34,14 +34,20 @@ pub enum FwdMsg {
     Panic,
     /// Custom controls triggered by MIDI. `generation` tags the events they produce.
     SetMappings(Arc<[Mapping]>, u64),
-    /// MIDI Learn for a custom control; `None` cancels.
-    Learn(Option<usize>),
+    /// MIDI triggers of the arpeggiator / sequencer.
+    SetPatternMappings(Arc<[(PatternAction, MidiTrigger)]>),
+    /// MIDI Learn for a custom control or a pattern action; `None` cancels.
+    Learn(Option<LearnTarget>),
     /// A clock message from the clock device or the internal tempo.
     Clock(ClockOrigin, ClockMsg),
     /// Arpeggiator / sequencer settings.
     SetPattern(Arc<PatternSettings>),
     /// Start (waits for the next bar) or stop the sequencer.
     SeqPlay(bool),
+    /// Start or end recording into the sequencer.
+    SeqRecord(bool),
+    /// Step recording: leave the next step empty.
+    SeqRest,
     Stop,
 }
 
@@ -58,6 +64,8 @@ pub trait Sink {
     fn control(&mut self, generation: u64, event: ControlEvent);
     /// Arpeggiator / sequencer state for the display.
     fn transport(&mut self, transport: Transport);
+    /// Steps recorded into the sequencer.
+    fn recorded(&mut self, recorded: Recorded);
 }
 
 pub struct Core {
@@ -167,6 +175,9 @@ impl Core {
             self.last_transport = t;
             sink.transport(t);
         }
+        if let Some(recorded) = self.pattern.take_recorded() {
+            sink.recorded(recorded);
+        }
     }
 
     fn gen_release(&mut self, sink: &mut impl Sink, note: u8, out: u8) {
@@ -208,6 +219,16 @@ impl Core {
         self.apply_gen(sink, semitones);
     }
 
+    pub fn seq_record(&mut self, sink: &mut impl Sink, on: bool, semitones: i32) {
+        self.pattern.record(on, &mut self.gen_buf);
+        self.apply_gen(sink, semitones);
+    }
+
+    pub fn seq_rest(&mut self, sink: &mut impl Sink, semitones: i32) {
+        self.pattern.rest(&mut self.gen_buf);
+        self.apply_gen(sink, semitones);
+    }
+
     /// Process one incoming MIDI message.
     pub fn handle(&mut self, sink: &mut impl Sink, bytes: &[u8], semitones: i32) {
         self.handle_at(sink, bytes, semitones, Instant::now());
@@ -222,9 +243,26 @@ impl Core {
         let channel = status_byte & 0x0F;
         if !self.mappings.is_idle() {
             let generation = self.generation;
-            let swallow = self
-                .mappings
-                .process(bytes, |event| sink.control(generation, event));
+            // Play, Record and Rest act here right away; everything else goes to the supervisor.
+            let (mut play, mut record, mut rest) = (false, false, false);
+            let swallow = self.mappings.process(bytes, |event| match event {
+                ControlEvent::Pattern(PatternAction::Play) => play = !play,
+                ControlEvent::Pattern(PatternAction::Record) => record = !record,
+                ControlEvent::Pattern(PatternAction::Rest) => rest = true,
+                _ => sink.control(generation, event),
+            });
+            if play || record || rest {
+                if record {
+                    self.pattern.toggle_record(&mut self.gen_buf);
+                }
+                if play {
+                    self.pattern.toggle_play(&mut self.gen_buf);
+                }
+                if rest {
+                    self.pattern.rest(&mut self.gen_buf);
+                }
+                self.apply_gen(sink, semitones);
+            }
             if swallow {
                 // A key that is still sounding must always be released, even if
                 // its Note Off is now mapped to a control.
@@ -254,14 +292,16 @@ impl Core {
                 if pressed {
                     self.in_count[i] = self.in_count[i].saturating_add(1);
                     sink.key(0, note, velocity);
-                    self.pattern.note(channel, note, velocity, true);
+                    self.pattern
+                        .note(channel, note, velocity, true, &mut self.gen_buf);
                 } else if released {
                     self.in_count[i] = self.in_count[i].saturating_sub(1);
                     if self.in_count[i] == 0 {
                         sink.key(0, note, 0);
                     }
-                    self.pattern.note(channel, note, 0, false);
+                    self.pattern.note(channel, note, 0, false, &mut self.gen_buf);
                 }
+                self.apply_gen(sink, semitones);
                 // Polyphonic aftertouch has no matching note while a pattern plays.
                 return;
             }
@@ -336,8 +376,12 @@ impl Core {
         self.generation = generation;
     }
 
-    pub fn learn(&mut self, index: Option<usize>) {
-        self.mappings.learn(index);
+    pub fn set_pattern_mappings(&mut self, list: Arc<[(PatternAction, MidiTrigger)]>) {
+        self.mappings.set_pattern(list);
+    }
+
+    pub fn learn(&mut self, target: Option<LearnTarget>) {
+        self.mappings.learn(target);
     }
 
     pub fn set_osc(&mut self, sink: &mut impl Sink, enabled: bool, original: bool) {
@@ -422,6 +466,10 @@ impl Sink for LiveSink<'_> {
         self.shared.set_transport(transport);
         self.keys_changed = true;
     }
+
+    fn recorded(&mut self, recorded: Recorded) {
+        let _ = self.cmd_tx.send(EngineCmd::SeqRecorded(recorded));
+    }
 }
 
 pub fn spawn(
@@ -460,6 +508,15 @@ pub fn spawn(
                         let semitones = shared.transpose.load(Ordering::Relaxed);
                         core.seq_play(&mut sink, on, semitones);
                     }
+                    FwdMsg::SeqRecord(on) => {
+                        let semitones = shared.transpose.load(Ordering::Relaxed);
+                        core.seq_record(&mut sink, on, semitones);
+                    }
+                    FwdMsg::SeqRest => {
+                        let semitones = shared.transpose.load(Ordering::Relaxed);
+                        core.seq_rest(&mut sink, semitones);
+                    }
+                    FwdMsg::SetPatternMappings(list) => core.set_pattern_mappings(list),
                     FwdMsg::SetOutput(new) => {
                         core.silence_output(&mut sink);
                         *sink.output = new;
@@ -467,7 +524,7 @@ pub fn spawn(
                     FwdMsg::SetOsc { enabled, original } => core.set_osc(&mut sink, enabled, original),
                     FwdMsg::Panic => core.panic(&mut sink),
                     FwdMsg::SetMappings(list, generation) => core.set_mappings(list, generation),
-                    FwdMsg::Learn(index) => core.learn(index),
+                    FwdMsg::Learn(target) => core.learn(target),
                     FwdMsg::Stop => {
                         core.panic(&mut sink);
                         break;
@@ -495,6 +552,7 @@ mod tests {
         modw: u8,
         controls: Vec<ControlEvent>,
         transport: Transport,
+        recorded: Vec<Recorded>,
     }
 
     impl Default for Rec {
@@ -509,6 +567,7 @@ mod tests {
                 modw: 0,
                 controls: Vec::new(),
                 transport: Transport::default(),
+                recorded: Vec::new(),
             }
         }
     }
@@ -540,6 +599,9 @@ mod tests {
         }
         fn transport(&mut self, transport: Transport) {
             self.transport = transport;
+        }
+        fn recorded(&mut self, recorded: Recorded) {
+            self.recorded.push(recorded);
         }
     }
 
@@ -785,5 +847,55 @@ mod tests {
         assert!(rec.keys[1][127], "127 is still held by the second key");
         core.handle(&mut rec, &[0x80, 127, 0], 24);
         assert!(!rec.keys[1][127]);
+    }
+
+    #[test]
+    fn midi_triggers_start_recording_and_the_keys_are_recorded_and_heard() {
+        use crate::project::{TriggerKind, TriggerMode};
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        let mut settings = PatternSettings {
+            mode: crate::project::PatternMode::Seq,
+            ..Default::default()
+        };
+        settings.seq.root = 60;
+        core.set_pattern(&mut rec, Arc::new(settings), 12);
+        let button = |number| MidiTrigger {
+            kind: TriggerKind::Cc,
+            channel: None,
+            number,
+            mode: TriggerMode::Toggle,
+            forward: false,
+        };
+        core.set_pattern_mappings(
+            vec![
+                (PatternAction::Record, button(20)),
+                (PatternAction::Rest, button(21)),
+                (PatternAction::NextMode, button(22)),
+            ]
+            .into(),
+        );
+        core.handle(&mut rec, &[0xB0, 20, 127], 12);
+        assert_eq!(rec.transport.rec, crate::midi::pattern::RecState::Step);
+        core.handle(&mut rec, &[0x90, 62, 100], 12);
+        assert_eq!(
+            rec.midi,
+            [vec![0x90, 74, 100]],
+            "heard, transposed like everything else"
+        );
+        core.handle(&mut rec, &[0x80, 62, 0], 12);
+        assert_eq!(rec.midi[1], [0x80, 74, 0]);
+        core.handle(&mut rec, &[0xB0, 21, 127], 12);
+        assert_eq!(rec.transport.step, 2);
+        core.handle(&mut rec, &[0xB0, 20, 0], 12);
+        core.handle(&mut rec, &[0xB0, 20, 127], 12);
+        let last = rec.recorded.last().unwrap();
+        assert!(last.done);
+        assert_eq!(
+            (last.length, last.steps[0].offset, last.steps[1].on),
+            (2, 2, false)
+        );
+        // Mode changes are for the supervisor.
+        core.handle(&mut rec, &[0xB0, 22, 127], 12);
+        assert_eq!(rec.controls, [ControlEvent::Pattern(PatternAction::NextMode)]);
     }
 }

@@ -217,7 +217,7 @@
   </section>
 
   <!-- Arp / Sequencer settings while a mode is on (compact; full view in the rail) -->
-  {#if p.pattern.mode !== 'off'}
+  {#if app.patternMode !== 'off'}
     <div class="pattern" role="group" aria-label={t('pattern.title')}>
       <PatternPanels compact />
     </div>

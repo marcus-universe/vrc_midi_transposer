@@ -155,7 +155,8 @@ Optional section, defaults when missing:
   "clock": { "source": "input", "device": null, "internal_fallback": true, "bpm": 120 },
   "arp": { "style": "up", "rate": "1/16", "octaves": 1, "gate": 50, "swing": 0, "latch": false, "velocity": null },
   "seq": { "rate": "1/16", "length": 16, "root": 48, "swing": 0, "channel": 1, "follow_transport": true,
-           "steps": [ { "on": true, "offset": 0, "velocity": 100, "gate": 50, "tie": false } ] }
+           "steps": [ { "on": true, "offset": 0, "velocity": 100, "gate": 50, "tie": false } ] },
+  "midi": { "next_mode": { "kind": "cc", "channel": 1, "number": 20, "mode": "toggle", "forward": false } }
 }
 ```
 
@@ -163,3 +164,6 @@ Optional section, defaults when missing:
 - Styles: `up`, `down`, `up_down`, `down_up`, `up_down_inclusive`, `played`, `reverse`, `random`, `chord`. Rates: `1/1 1/2 1/2T 1/4D 1/4 1/4T 1/8D 1/8 1/8T 1/16D 1/16 1/16T 1/32 1/32T`. Bars are 4/4.
 - While a mode is on, played keys do not sound themselves: the arpeggiator plays the held keys, the sequencer plays its steps relative to the last held key (or `root`). Generated notes are transposed and go to the MIDI output, the keyboard display (output half) and OSC.
 - The sequencer's Play waits for the next bar line of the clock; with `follow_transport` a MIDI Start starts it at once and MIDI Stop stops it.
+- `midi`: optional MIDI triggers (same shape as a custom control's `midi`) for the actions `off`, `arp`, `seq`, `next_mode`, `play`, `record`, `rest`; missing keys have no trigger. A Note On, a CC rising to 64 or more, or a Program Change fires; `mode` is ignored; without `forward` the message is swallowed. Play, Record and Rest act in the forwarder; mode actions go to the supervisor.
+- A mode switched by MIDI is **session state** (`Snapshot.pattern_mode`); the project's `mode` changes only from the UI (`set_pattern_mode` is sent with the project edit). Loading a project or a UI change of `mode` resets the session mode to the project's.
+- Recording (`seq_record`): stopped, step recording (each key fills the next step, `seq_rest` leaves one empty, the length becomes the number of steps); playing or armed, one loop of live recording from the next loop start, quantised to the nearest step, held keys tie, unplayed steps become rests. Recorded keys sound (thru), are not used to transpose, and do not sound the old steps during the live loop. Results arrive as `Snapshot.seq_recorded` (`seq` grows; `done` at the end) and the UI writes them into the project as an edit.

@@ -8,8 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::midi::pattern::{ClockState, Transport};
-use crate::project::{MidiTrigger, Project};
+use crate::midi::pattern::{ClockState, RecState, Transport};
+use crate::project::{MidiTrigger, PatternAction, PatternMode, Project, Step};
 
 fn pack_transport(t: &Transport) -> u64 {
     let clock = match t.clock {
@@ -23,6 +23,7 @@ fn pack_transport(t: &Transport) -> u64 {
         | (t.playing as u64) << 20
         | (t.armed as u64) << 21
         | ((t.step + 1) as u16 as u64) << 22
+        | (t.rec as u64) << 38
 }
 
 fn unpack_transport(v: u64) -> Transport {
@@ -37,6 +38,12 @@ fn unpack_transport(v: u64) -> Transport {
         playing: (v >> 20) & 1 == 1,
         armed: (v >> 21) & 1 == 1,
         step: ((v >> 22) as u16) as i16 - 1,
+        rec: match (v >> 38) & 3 {
+            1 => RecState::Step,
+            2 => RecState::Waiting,
+            3 => RecState::Live,
+            _ => RecState::Off,
+        },
     }
 }
 
@@ -172,6 +179,25 @@ pub struct Learned {
     pub trigger: MidiTrigger,
 }
 
+/// Result of MIDI Learn for an arpeggiator / sequencer action.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PatternLearned {
+    pub seq: u64,
+    pub action: PatternAction,
+    pub trigger: MidiTrigger,
+}
+
+/// Steps recorded into the sequencer, for the front end to put into the project.
+/// `seq` grows with every result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SeqRecorded {
+    pub seq: u64,
+    pub steps: Vec<Step>,
+    pub length: u8,
+    /// Recording ended.
+    pub done: bool,
+}
+
 /// Everything a front end needs to draw the current state. Sent whole, never as a delta.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Snapshot {
@@ -196,6 +222,14 @@ pub struct Snapshot {
     pub learning: Option<usize>,
     /// Last MIDI Learn result.
     pub learned: Option<Learned>,
+    /// Arpeggiator / sequencer action waiting for MIDI Learn, if any.
+    pub pattern_learning: Option<PatternAction>,
+    pub pattern_learned: Option<PatternLearned>,
+    /// The pattern mode playing now. Switching by MIDI changes it for the
+    /// session; the project keeps its own.
+    pub pattern_mode: PatternMode,
+    /// Last recording result.
+    pub seq_recorded: Option<SeqRecorded>,
 }
 
 /// Notifications for the front end. Wake-up tokens: the data is read from [`Shared`].
@@ -439,6 +473,7 @@ mod tests {
             playing: true,
             armed: false,
             step: 63,
+            rec: RecState::Live,
         };
         shared.set_transport(t);
         assert_eq!(shared.transport(), t);

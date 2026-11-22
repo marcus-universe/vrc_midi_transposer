@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::project::{MidiTrigger, SendAddress, TriggerKind, TriggerMode, ValueType};
+use crate::project::{MidiTrigger, PatternAction, SendAddress, TriggerKind, TriggerMode, ValueType};
 
 /// One custom control with a MIDI trigger, prepared for the forwarder.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +47,20 @@ pub enum ControlEvent {
     Toggle { index: usize },
     /// MIDI Learn: this message should trigger control `index`.
     Learned { index: usize, trigger: MidiTrigger },
+    /// A trigger of the arpeggiator / sequencer fired.
+    Pattern(PatternAction),
+    /// MIDI Learn: this message should trigger a pattern action.
+    PatternLearned {
+        action: PatternAction,
+        trigger: MidiTrigger,
+    },
+}
+
+/// What MIDI Learn is waiting for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LearnTarget {
+    Control(usize),
+    Pattern(PatternAction),
 }
 
 #[derive(Default)]
@@ -54,8 +68,12 @@ pub struct Mappings {
     list: Option<Arc<[Mapping]>>,
     /// Last CC value per mapping, so a knob held still does not repeat itself.
     last_cc: Vec<Option<u8>>,
-    /// MIDI Learn waits for a message for this control.
-    learn: Option<usize>,
+    /// Pattern triggers (mode, Play, Record).
+    pattern: Option<Arc<[(PatternAction, MidiTrigger)]>>,
+    /// Last CC value per pattern trigger: a CC fires when it rises to 64 or more.
+    pattern_cc: Vec<Option<u8>>,
+    /// MIDI Learn waits for a message for this target.
+    learn: Option<LearnTarget>,
 }
 
 impl Mappings {
@@ -64,12 +82,17 @@ impl Mappings {
         self.list = (!list.is_empty()).then_some(list);
     }
 
-    pub fn learn(&mut self, index: Option<usize>) {
-        self.learn = index;
+    pub fn set_pattern(&mut self, list: Arc<[(PatternAction, MidiTrigger)]>) {
+        self.pattern_cc = vec![None; list.len()];
+        self.pattern = (!list.is_empty()).then_some(list);
+    }
+
+    pub fn learn(&mut self, target: Option<LearnTarget>) {
+        self.learn = target;
     }
 
     pub fn is_idle(&self) -> bool {
-        self.list.is_none() && self.learn.is_none()
+        self.list.is_none() && self.pattern.is_none() && self.learn.is_none()
     }
 
     /// Look at one incoming message. Calls `emit` for every control it
@@ -84,7 +107,7 @@ impl Mappings {
         let number = data1 & 0x7F;
         let value = bytes.get(2).copied().unwrap_or(0) & 0x7F;
 
-        if let Some(index) = self.learn {
+        if let Some(target) = self.learn {
             let learned = match kind {
                 0x90 if value > 0 => Some(TriggerKind::Note),
                 0xB0 => Some(TriggerKind::Cc),
@@ -93,23 +116,46 @@ impl Mappings {
             };
             if let Some(kind) = learned {
                 self.learn = None;
-                emit(ControlEvent::Learned {
-                    index,
-                    trigger: MidiTrigger {
-                        kind,
-                        channel: Some(channel),
-                        number,
-                        mode: TriggerMode::Toggle,
-                        forward: false,
-                    },
+                let trigger = MidiTrigger {
+                    kind,
+                    channel: Some(channel),
+                    number,
+                    mode: TriggerMode::Toggle,
+                    forward: false,
+                };
+                emit(match target {
+                    LearnTarget::Control(index) => ControlEvent::Learned { index, trigger },
+                    LearnTarget::Pattern(action) => ControlEvent::PatternLearned { action, trigger },
                 });
             }
         }
 
-        let Some(list) = &self.list else {
-            return false;
-        };
         let mut swallow = false;
+        if let Some(list) = &self.pattern {
+            for (slot, (action, t)) in list.iter().enumerate() {
+                if t.number != number || t.channel.is_some_and(|c| c != channel) {
+                    continue;
+                }
+                let fire = match (t.kind, kind) {
+                    (TriggerKind::Cc, 0xB0) => {
+                        let before = self.pattern_cc[slot].replace(value);
+                        value >= 64 && before.is_none_or(|b| b < 64)
+                    }
+                    (TriggerKind::Note, 0x90) => value > 0,
+                    (TriggerKind::Note, 0x80) => false,
+                    (TriggerKind::Program, 0xC0) => true,
+                    _ => continue,
+                };
+                if fire {
+                    emit(ControlEvent::Pattern(*action));
+                }
+                swallow |= !t.forward;
+            }
+        }
+
+        let Some(list) = &self.list else {
+            return swallow;
+        };
         for (slot, m) in list.iter().enumerate() {
             let t = &m.trigger;
             if t.number != number || t.channel.is_some_and(|c| c != channel) {
@@ -252,7 +298,7 @@ mod tests {
     #[test]
     fn learn_takes_the_next_usable_message_once() {
         let mut m = Mappings::default();
-        m.learn(Some(4));
+        m.learn(Some(LearnTarget::Control(4)));
         assert!(!m.is_idle());
         assert_eq!(run(&mut m, &[0xE0, 0, 64]).1, [], "pitch bend is not learnable");
         assert_eq!(run(&mut m, &[0x80, 60, 0]).1, [], "note off is not learnable");
@@ -273,5 +319,62 @@ mod tests {
         );
         assert_eq!(run(&mut m, &[0x90, 60, 100]).1, [], "only once");
         assert!(m.is_idle());
+    }
+
+    #[test]
+    fn pattern_triggers_fire_on_press_and_on_a_rising_cc() {
+        let note = MidiTrigger {
+            kind: TriggerKind::Note,
+            channel: None,
+            number: 24,
+            mode: TriggerMode::Toggle,
+            forward: false,
+        };
+        let cc = MidiTrigger {
+            kind: TriggerKind::Cc,
+            number: 80,
+            ..note
+        };
+        let mut m = Mappings::default();
+        m.set_pattern(vec![(PatternAction::NextMode, note), (PatternAction::Play, cc)].into());
+        assert_eq!(
+            run(&mut m, &[0x90, 24, 90]),
+            (true, vec![ControlEvent::Pattern(PatternAction::NextMode)])
+        );
+        assert_eq!(
+            run(&mut m, &[0x80, 24, 0]),
+            (true, vec![]),
+            "release does nothing"
+        );
+        assert_eq!(
+            run(&mut m, &[0xB0, 80, 127]).1,
+            [ControlEvent::Pattern(PatternAction::Play)]
+        );
+        assert_eq!(run(&mut m, &[0xB0, 80, 100]).1, [], "still pressed");
+        assert_eq!(run(&mut m, &[0xB0, 80, 0]).1, [], "button let go");
+        assert_eq!(
+            run(&mut m, &[0xB0, 80, 127]).1,
+            [ControlEvent::Pattern(PatternAction::Play)]
+        );
+        assert_eq!(run(&mut m, &[0x90, 25, 90]), (false, vec![]), "other keys play");
+    }
+
+    #[test]
+    fn learn_for_a_pattern_action() {
+        let mut m = Mappings::default();
+        m.learn(Some(LearnTarget::Pattern(PatternAction::Record)));
+        let (_, ev) = run(&mut m, &[0xC1, 9]);
+        assert!(matches!(
+            ev[..],
+            [ControlEvent::PatternLearned {
+                action: PatternAction::Record,
+                trigger: MidiTrigger {
+                    kind: TriggerKind::Program,
+                    channel: Some(2),
+                    number: 9,
+                    ..
+                }
+            }]
+        ));
     }
 }

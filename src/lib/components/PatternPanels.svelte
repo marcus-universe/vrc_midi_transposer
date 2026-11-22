@@ -14,6 +14,7 @@
   import Field from '../components/Field.svelte';
   import Icon from '../components/Icon.svelte';
   import PlayButton from '../components/PlayButton.svelte';
+  import RecordButton from '../components/RecordButton.svelte';
   import Segmented from '../components/Segmented.svelte';
   import Slider from '../components/Slider.svelte';
   import StepGrid from '../components/StepGrid.svelte';
@@ -24,6 +25,8 @@
 
   const s = $derived(app.snapshot);
   const pat = $derived(app.project.pattern);
+  // The mode playing now: MIDI can switch it for the session.
+  const mode = $derived(app.patternMode);
 
   /** Typing: send after a pause. */
   const touch = () => app.touch();
@@ -178,7 +181,7 @@
       {/if}
     </section>
 
-    {#if pat.mode === 'arp'}
+    {#if mode === 'arp'}
       <!-- Arpeggiator -->
       <section class="card" aria-labelledby="pat-arp-title">
         <div class="card-head">
@@ -246,14 +249,14 @@
           {@render range('pat-arp-vel', t('pattern.fixedVelocity'), '', vel, 1, 127, formatNumber(vel), (v) => (pat.arp.velocity = v))}
         {/if}
       </section>
-    {:else if pat.mode === 'seq'}
+    {:else if mode === 'seq'}
       <!-- Sequencer -->
       <section class="card" aria-labelledby="pat-seq-title">
         <div class="card-head">
           <h2 class="card-title" id="pat-seq-title">{t('pattern.seq')}</h2>
         </div>
 
-        {#if !compact}<div class="play-row"><PlayButton /></div>{/if}
+        {#if !compact}<div class="play-row"><PlayButton /><RecordButton /></div>{/if}
 
         <div class="pair">
           {@render rateSelect('pat-seq-rate', pat.seq.rate, (r) => (pat.seq.rate = r))}
@@ -321,7 +324,7 @@
     {/if}
   </div>
 
-  {#if pat.mode === 'seq'}
+  {#if mode === 'seq'}
     {#if compact}
       <!-- On the dashboard the grid is folded away until wanted. -->
       <details class="card steps-fold" bind:open={stepsOpen}>
@@ -505,6 +508,8 @@
 
   .play-row {
     display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
   }
 
   .play-row :global(.play) {

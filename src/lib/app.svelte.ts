@@ -7,6 +7,8 @@ import {
   type EngineCmd,
   type Frame,
   type LogLine,
+  type PatternAction,
+  type PatternMode,
   type Project,
   type ProjectState,
   type RecentFile,
@@ -110,6 +112,10 @@ const EMPTY_SNAPSHOT: Snapshot = {
   mqtt: { state: 'disabled', detail: '', entities: 0, last_command: null, last_command_ts: 0 },
   learning: null,
   learned: null,
+  pattern_learning: null,
+  pattern_learned: null,
+  pattern_mode: 'off',
+  seq_recorded: null,
 };
 
 const EMPTY_PROJECT: Project = {
@@ -161,6 +167,7 @@ export interface PlayState {
   clock: Transport['clock'];
   playing: boolean;
   armed: boolean;
+  rec: Transport['rec'];
 }
 type LogListener = (added: readonly LogLine[], cleared: boolean) => void;
 
@@ -225,7 +232,7 @@ class AppStore {
    */
   transport: Transport = { ...IDLE_TRANSPORT };
   /** The low-rate part of `transport`, reactive for the Play button and the clock source line. */
-  play = $state.raw<PlayState>({ clock: 'none', playing: false, armed: false });
+  play = $state.raw<PlayState>({ clock: 'none', playing: false, armed: false, rec: 'off' });
   /** Set when the user opens the console, so its input takes focus once mounted. */
   focusConsole = false;
 
@@ -266,6 +273,8 @@ class AppStore {
       this.snapshot = init.snapshot;
       // A learn result from before this window existed is not applied again.
       this.#learnedSeq = init.snapshot.learned?.seq ?? -1;
+      this.#patternLearnedSeq = init.snapshot.pattern_learned?.seq ?? -1;
+      this.#recordedSeq = init.snapshot.seq_recorded?.seq ?? -1;
       this.project = init.project;
       this.dirty = init.dirty;
       this.path = init.path;
@@ -303,6 +312,7 @@ class AppStore {
     if (frame.snap) {
       this.snapshot = frame.snap;
       this.#takeLearned(frame.snap);
+      this.#takeRecorded(frame.snap);
     }
     if (frame.cleared) this.logs = [];
     if (frame.logs?.length) {
@@ -346,8 +356,8 @@ class AppStore {
     const prev = this.transport;
     this.transport = next;
     const p = this.play;
-    if (p.clock !== next.clock || p.playing !== next.playing || p.armed !== next.armed) {
-      this.play = { clock: next.clock, playing: next.playing, armed: next.armed };
+    if (p.clock !== next.clock || p.playing !== next.playing || p.armed !== next.armed || p.rec !== next.rec) {
+      this.play = { clock: next.clock, playing: next.playing, armed: next.armed, rec: next.rec };
     }
     // The transport arrives with every key frame; listeners only hear about real changes.
     if (
@@ -356,7 +366,8 @@ class AppStore {
       prev.bpm !== next.bpm ||
       prev.clock !== next.clock ||
       prev.playing !== next.playing ||
-      prev.armed !== next.armed
+      prev.armed !== next.armed ||
+      prev.rec !== next.rec
     ) {
       for (const fn of this.#transportListeners) fn(next);
     }
@@ -365,6 +376,43 @@ class AppStore {
   /** Sequencer Play (from the next bar) or Stop. Play while armed cancels. */
   seqPlay(on: boolean) {
     return this.engine({ type: 'seq_play', on });
+  }
+
+  /** Record: stopped, step by step; playing, one loop live from the next loop start. */
+  seqRecord(on: boolean) {
+    return this.engine({ type: 'seq_record', on });
+  }
+
+  /** Step recording: leave the next step empty. */
+  seqRest() {
+    return this.engine({ type: 'seq_rest' });
+  }
+
+  /** The pattern mode playing now (MIDI may have switched it for the session). */
+  get patternMode(): PatternMode {
+    return this.snapshot.pattern_mode;
+  }
+
+  /** Choose the mode in the UI: a project edit, and the session follows right away. */
+  setPatternMode(mode: PatternMode) {
+    this.project.pattern.mode = mode;
+    this.touch(true);
+    void this.engine({ type: 'set_pattern_mode', mode });
+  }
+
+  #recordedSeq = -1;
+
+  /** Recorded steps go into the project like an edit in the step grid. */
+  #takeRecorded(snap: Snapshot) {
+    const r = snap.seq_recorded;
+    if (!r || r.seq === this.#recordedSeq) return;
+    this.#recordedSeq = r.seq;
+    const seq = this.project.pattern.seq;
+    r.steps.forEach((step, i) => {
+      if (seq.steps[i]) Object.assign(seq.steps[i], step);
+    });
+    seq.length = r.length;
+    this.touch(r.done);
   }
 
   #emitKeys() {
@@ -419,6 +467,21 @@ class AppStore {
     return this.snapshot.learning;
   }
 
+  /** Arpeggiator / sequencer action waiting for MIDI, or null. */
+  get patternLearning(): PatternAction | null {
+    return this.snapshot.pattern_learning;
+  }
+
+  #patternLearnedSeq = -1;
+
+  /** Waits for the next Note On, CC or Program Change and makes it the trigger of `action`. */
+  startPatternLearn(action: PatternAction) {
+    clearTimeout(this.#learnTimer);
+    this.#learnSeen = false;
+    this.#learnTimer = setTimeout(() => this.stopLearn(), LEARN_TIMEOUT_MS);
+    void this.engine({ type: 'pattern_learn', action });
+  }
+
   /** Waits for the next Note On, CC or Program Change and makes it the trigger of control `index`. */
   startLearn(index: number) {
     clearTimeout(this.#learnTimer);
@@ -432,17 +495,25 @@ class AppStore {
     this.#learnTimer = undefined;
     this.#learnSeen = false;
     if (this.snapshot.learning !== null) void this.engine({ type: 'midi_learn', index: null });
+    if (this.snapshot.pattern_learning !== null) void this.engine({ type: 'pattern_learn', action: null });
   }
 
   #takeLearned(snap: Snapshot) {
     // The timeout ends when learning ends, not on a frame that was read
     // before the engine started listening (it still says null).
-    if (snap.learning !== null) {
+    if (snap.learning !== null || snap.pattern_learning !== null) {
       this.#learnSeen = true;
     } else if (this.#learnSeen) {
       this.#learnSeen = false;
       clearTimeout(this.#learnTimer);
       this.#learnTimer = undefined;
+    }
+    const pl = snap.pattern_learned;
+    if (pl && pl.seq !== this.#patternLearnedSeq) {
+      this.#patternLearnedSeq = pl.seq;
+      const old = this.project.pattern.midi[pl.action];
+      this.project.pattern.midi[pl.action] = { ...pl.trigger, forward: old?.forward ?? false };
+      this.touch(true);
     }
     const learned = snap.learned;
     if (!learned || learned.seq === this.#learnedSeq) return;

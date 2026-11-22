@@ -26,7 +26,8 @@
   let lit = -1;
 
   function paint(tr: Readonly<Transport>) {
-    const step = tr.playing ? tr.step : -1;
+    // The playhead, or while step recording the step the next key fills.
+    const step = tr.playing || tr.rec === 'step' ? tr.step : -1;
     if (step === lit) return;
     cols[lit]?.classList.remove('now');
     cols[step]?.classList.add('now');

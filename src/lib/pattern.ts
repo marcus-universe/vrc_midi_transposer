@@ -21,10 +21,19 @@ export function defaultPattern(): PatternSettings {
     clock: { source: 'input', device: null, internal_fallback: true, bpm: 120 },
     arp: { style: 'up', rate: '1/16', octaves: 1, gate: 50, swing: 0, latch: false, velocity: null },
     seq: { rate: '1/16', length: 16, root: 48, swing: 0, channel: 1, follow_transport: true, steps },
+    midi: {},
   };
 }
 
-export const IDLE_TRANSPORT: Transport = { clock: 'none', bpm: 0, beat: 0, playing: false, armed: false, step: -1 };
+export const IDLE_TRANSPORT: Transport = {
+  clock: 'none',
+  bpm: 0,
+  beat: 0,
+  playing: false,
+  armed: false,
+  step: -1,
+  rec: 'off',
+};
 
 /** MIDI clock ticks (24 per quarter note) of one step. */
 export function rateTicks(rate: Rate): number {

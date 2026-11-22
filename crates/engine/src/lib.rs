@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 pub use midi::mapping::ControlEvent;
-pub use midi::pattern::{ClockState, Transport};
+pub use midi::pattern::{ClockState, RecState, Recorded, Transport};
 pub use mqtt::MqttEvent;
 pub use project::{Project, Store};
 pub use state::{EngineEvent, Level, LogLine, Snapshot};
@@ -56,8 +56,18 @@ pub enum EngineCmd {
     /// MIDI Learn for custom control `index`: the next Note On, CC or Program
     /// Change becomes its trigger (reported in `Snapshot::learned`). `None` cancels.
     MidiLearn(Option<usize>),
+    /// MIDI Learn for an arpeggiator / sequencer action (reported in
+    /// `Snapshot::pattern_learned`). `None` cancels.
+    PatternLearn(Option<project::PatternAction>),
+    /// Switch the pattern mode for this session.
+    SetPatternMode(project::PatternMode, Source),
     /// Start (on the next bar of the clock) or stop the sequencer.
     SeqPlay(bool),
+    /// Start or end recording into the sequencer. Stopped: step recording;
+    /// playing: one loop of live recording. Results arrive as `Snapshot::seq_recorded`.
+    SeqRecord(bool),
+    /// Step recording: leave the next step empty.
+    SeqRest,
     /// Run a console command line.
     Console(String),
     /// Add a line to the log.
@@ -78,6 +88,8 @@ pub enum EngineCmd {
     OutputLost(String),
     #[doc(hidden)]
     Mqtt(u64, MqttEvent),
+    #[doc(hidden)]
+    SeqRecorded(Recorded),
     #[doc(hidden)]
     MidiControl {
         generation: u64,

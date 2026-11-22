@@ -11,10 +11,14 @@
   import BeatDots from './BeatDots.svelte';
   import Icon from './Icon.svelte';
   import PlayButton from './PlayButton.svelte';
+  import RecordButton from './RecordButton.svelte';
   import Segmented from './Segmented.svelte';
 
-  const mode = $derived(app.project.pattern.mode);
+  // The mode playing now: MIDI can switch it for the session.
+  const mode = $derived(app.patternMode);
   const noClock = $derived(mode !== 'off' && app.play.clock === 'none');
+  // Step recording does not follow the clock; its buttons take the room of the beat.
+  const stepRec = $derived(app.play.rec === 'step');
 
   let bpmEl = $state<HTMLSpanElement>();
   let shownBpm = -1;
@@ -39,8 +43,7 @@
   });
 
   function setMode(value: string) {
-    app.project.pattern.mode = value as PatternMode;
-    app.touch(true);
+    app.setPatternMode(value as PatternMode);
   }
 </script>
 
@@ -60,7 +63,7 @@
     onchange={setMode}
   />
 
-  {#if mode !== 'off'}
+  {#if mode !== 'off' && !stepRec}
     {#if noClock}
       <span class="clock warn" title={t('pattern.noClock')}>
         <Icon name="alert" size={14} />
@@ -75,7 +78,7 @@
   {/if}
 
   <span class="end">
-    {#if mode === 'seq'}<PlayButton small />{/if}
+    {#if mode === 'seq'}<RecordButton small /><PlayButton small />{/if}
   </span>
 </section>
 
@@ -112,14 +115,35 @@
     display: none;
   }
 
-  /* Narrow column: the beat dots stay, the tempo in words goes, so Play fits on the same line. */
-  @container pattern-strip (inline-size < 340px) {
+  /* Narrower: the tempo in words goes first, then the Play label (it stays
+     for screen readers), so everything fits on one line. */
+  @container pattern-strip (inline-size < 420px) {
     .bpm {
       display: none;
     }
   }
 
-  /* Play / Stop and the settings link sit at the end of the row. */
+  @container pattern-strip (inline-size < 330px) {
+    .end :global(.play > span) {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .end :global(.play.small) {
+      min-inline-size: 32px;
+      padding-inline: 6px;
+    }
+
+    .strip > :global(.seg.small span) {
+      padding-inline: 5px;
+    }
+  }
+
+  /* Record and Play / Stop sit at the end of the row. */
   .end {
     display: inline-flex;
     align-items: center;

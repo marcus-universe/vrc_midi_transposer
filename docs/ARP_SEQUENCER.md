@@ -60,3 +60,28 @@ General settings: **Rate**, **Length** (1 to 64 steps), **Root note** (used whil
 - **Follow MIDI Start/Stop:** a MIDI Start from the clock source starts the sequencer at once (Start is beat one), a MIDI Stop stops it.
 - **Transposed by the held key:** while you hold a key, the steps play relative to it; let go and they play relative to the root note again. The last key pressed counts.
 - **Stop** ends the sounding note at once.
+
+### Recording
+
+**Record** (next to Play, and in the bar under Transpose on the dashboard) records the keys you play into the steps. You hear the keys while recording, transposed like everything else.
+
+| When you press Record | What is recorded |
+|---|---|
+| **Sequencer stopped**: step recording | Every key you press fills the next step, starting at step 1, timing does not matter. **Rest** leaves a step empty. Press Record again (or Play) to finish: the length becomes the number of recorded steps. |
+| **Sequencer playing** (or waiting for the bar): live recording | Recording starts with the next loop (a key up to half a step early still counts) and records **one loop** in the tempo of the clock. Keys are placed on the nearest step; a key held longer than a step ties into the next steps, a short one sets the gate. Steps you did not play become rests. The old steps are quiet during that loop, and the new ones play right after it. |
+
+The offset of a recorded step is the key minus the **root note**. Afterwards press Play: the recording plays in the tempo of the MIDI clock or the internal tempo, transposed by the held key like any sequence. The recorded steps are a normal project change; **Save** keeps them.
+
+## MIDI control
+
+The **MIDI control** card in the Arp / Sequencer view gives these actions a MIDI trigger, set with **Learn** like the custom controls:
+
+| Action | Does |
+|---|---|
+| Switch off / Arpeggiator / Sequencer | Switches to that mode. |
+| Next mode | Off → Arpeggiator → Sequencer → Off. |
+| Play / Stop | Starts the sequencer (on the next bar) or stops it. |
+| Record | Starts or ends recording. |
+| Rest | During step recording: leaves the next step empty. |
+
+A Note On, a CC rising to 64 or more (a button press), or a Program Change fires the action. The message is not played unless **Also to output** is on. A mode switched by MIDI lasts until you close the app or open a project; the project keeps the mode chosen in the app.

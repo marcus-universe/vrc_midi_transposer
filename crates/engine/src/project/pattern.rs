@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::model::PortRef;
+use super::model::{MidiTrigger, PortRef};
 
 /// Longest sequence.
 pub const MAX_STEPS: usize = 64;
@@ -224,6 +224,94 @@ impl Default for SeqSettings {
     }
 }
 
+/// Something a MIDI message can do to the arpeggiator / sequencer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternAction {
+    /// Switch the pattern off.
+    Off,
+    /// Switch to the arpeggiator.
+    Arp,
+    /// Switch to the sequencer.
+    Seq,
+    /// Off, Arp, Seq, Off, …
+    NextMode,
+    /// Start or stop the sequencer.
+    Play,
+    /// Start or stop recording into the sequencer.
+    Record,
+    /// While step recording: leave the next step empty.
+    Rest,
+}
+
+impl PatternAction {
+    pub const ALL: [PatternAction; 7] = [
+        PatternAction::Off,
+        PatternAction::Arp,
+        PatternAction::Seq,
+        PatternAction::NextMode,
+        PatternAction::Play,
+        PatternAction::Record,
+        PatternAction::Rest,
+    ];
+}
+
+/// MIDI messages that switch the mode, start the sequencer or record.
+/// Only the message counts: a Note On, a CC rising to 64 or more, or a Program Change.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PatternTriggers {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub off: Option<MidiTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arp: Option<MidiTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seq: Option<MidiTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_mode: Option<MidiTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub play: Option<MidiTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<MidiTrigger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rest: Option<MidiTrigger>,
+}
+
+impl PatternTriggers {
+    pub fn get(&self, action: PatternAction) -> Option<MidiTrigger> {
+        match action {
+            PatternAction::Off => self.off,
+            PatternAction::Arp => self.arp,
+            PatternAction::Seq => self.seq,
+            PatternAction::NextMode => self.next_mode,
+            PatternAction::Play => self.play,
+            PatternAction::Record => self.record,
+            PatternAction::Rest => self.rest,
+        }
+    }
+
+    pub fn set(&mut self, action: PatternAction, trigger: Option<MidiTrigger>) {
+        let slot = match action {
+            PatternAction::Off => &mut self.off,
+            PatternAction::Arp => &mut self.arp,
+            PatternAction::Seq => &mut self.seq,
+            PatternAction::NextMode => &mut self.next_mode,
+            PatternAction::Play => &mut self.play,
+            PatternAction::Record => &mut self.record,
+            PatternAction::Rest => &mut self.rest,
+        };
+        *slot = trigger;
+    }
+
+    /// The actions that have a trigger.
+    pub fn list(&self) -> Vec<(PatternAction, MidiTrigger)> {
+        PatternAction::ALL
+            .iter()
+            .filter_map(|&a| self.get(a).map(|t| (a, t)))
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PatternSettings {
@@ -231,6 +319,8 @@ pub struct PatternSettings {
     pub clock: ClockSettings,
     pub arp: ArpSettings,
     pub seq: SeqSettings,
+    /// MIDI triggers for the mode, Play and Record.
+    pub midi: PatternTriggers,
 }
 
 impl PatternSettings {
@@ -263,6 +353,13 @@ impl PatternSettings {
             step.offset = step.offset.clamp(-48, 48);
             step.velocity = step.velocity.clamp(1, 127);
             step.gate = step.gate.clamp(5, 100);
+        }
+        for action in PatternAction::ALL {
+            if let Some(mut t) = self.midi.get(action) {
+                t.number &= 0x7F;
+                t.channel = t.channel.filter(|c| (1..=16).contains(c));
+                self.midi.set(action, Some(t));
+            }
         }
     }
 }
