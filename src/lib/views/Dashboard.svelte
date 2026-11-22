@@ -5,6 +5,7 @@
   import type { MidiStatus, PortInfo } from '../ipc';
   import { NONE, SAVED, midiLine, portFromOption, portSelection } from '../ports';
   import Icon from '../components/Icon.svelte';
+  import PatternPanels from '../components/PatternPanels.svelte';
   import PatternStrip from '../components/PatternStrip.svelte';
   import RollingNumber from '../components/RollingNumber.svelte';
   import Segmented from '../components/Segmented.svelte';
@@ -215,6 +216,13 @@
     </dl>
   </section>
 
+  <!-- Arp / Sequencer settings while a mode is on (compact; full view in the rail) -->
+  {#if p.pattern.mode !== 'off'}
+    <div class="pattern" role="group" aria-label={t('pattern.title')}>
+      <PatternPanels compact />
+    </div>
+  {/if}
+
   <!-- Custom controls -->
   <section class="card custom" aria-labelledby="custom-title">
     <div class="card-head">
@@ -290,6 +298,7 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .lead,
+    .pattern,
     .custom {
       grid-column: 1 / -1;
     }
@@ -302,6 +311,15 @@
     .lead {
       grid-column: auto;
     }
+  }
+
+  /* Full width from 840 px too, below the top row. */
+  .pattern {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    grid-column: 1 / -1;
+    min-inline-size: 0;
   }
 
   /* --- Hero -------------------------------------------------------------- */
