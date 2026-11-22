@@ -2,7 +2,9 @@
 
 pub mod legacy;
 mod model;
+pub mod pattern;
 mod store;
 
 pub use model::*;
+pub use pattern::*;
 pub use store::{file_name_for, is_project_path, RecentFile, Settings, Startup, Store, EXTENSION};

@@ -8,13 +8,16 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use midir::MidiOutputConnection;
 
 use super::held_notes::{transposed, HeldNotes};
 use super::mapping::{ControlEvent, Mapping, Mappings};
+use super::pattern::{ClockMsg, ClockOrigin, Gen, PatternEngine, Transport};
 use super::MidiBytes;
 use crate::osc::out::OscOut;
+use crate::project::PatternSettings;
 use crate::state::Shared;
 use crate::EngineCmd;
 
@@ -33,6 +36,12 @@ pub enum FwdMsg {
     SetMappings(Arc<[Mapping]>, u64),
     /// MIDI Learn for a custom control; `None` cancels.
     Learn(Option<usize>),
+    /// A clock message from the clock device or the internal tempo.
+    Clock(ClockOrigin, ClockMsg),
+    /// Arpeggiator / sequencer settings.
+    SetPattern(Arc<PatternSettings>),
+    /// Start (waits for the next bar) or stop the sequencer.
+    SeqPlay(bool),
     Stop,
 }
 
@@ -47,6 +56,8 @@ pub trait Sink {
     fn wheels(&mut self, pitch: Option<u16>, modwheel: Option<u8>);
     /// A custom control was triggered by MIDI (or learned).
     fn control(&mut self, generation: u64, event: ControlEvent);
+    /// Arpeggiator / sequencer state for the display.
+    fn transport(&mut self, transport: Transport);
 }
 
 pub struct Core {
@@ -58,6 +69,12 @@ pub struct Core {
     osc_original: bool,
     mappings: Mappings,
     generation: u64,
+    pattern: PatternEngine,
+    /// Output notes of the arpeggiator / sequencer, like `held` for played keys.
+    gen_held: HeldNotes,
+    /// Notes the pattern produced, applied right after each call. Reused.
+    gen_buf: Vec<Gen>,
+    last_transport: Transport,
 }
 
 impl Default for Core {
@@ -71,6 +88,13 @@ impl Default for Core {
             osc_original: true,
             mappings: Mappings::default(),
             generation: 0,
+            pattern: PatternEngine::new(Arc::new(PatternSettings::default())),
+            gen_held: HeldNotes::default(),
+            gen_buf: Vec::with_capacity(256),
+            last_transport: Transport {
+                step: -1,
+                ..Transport::default()
+            },
         }
     }
 }
@@ -106,8 +130,91 @@ impl Core {
         }
     }
 
+    /// Play the notes the pattern produced and update its display state.
+    fn apply_gen(&mut self, sink: &mut impl Sink, semitones: i32) {
+        for i in 0..self.gen_buf.len() {
+            match self.gen_buf[i] {
+                Gen::On {
+                    channel,
+                    note,
+                    velocity,
+                } => {
+                    let (out, previous) = self.gen_held.note_on(channel, note, semitones);
+                    if let Some(old) = previous {
+                        sink.midi(&[0x80 | channel, old, 0]);
+                        self.gen_release(sink, note, old);
+                    }
+                    sink.midi(&[0x90 | channel, out, velocity]);
+                    let o = out as usize;
+                    self.out_count[o] = self.out_count[o].saturating_add(1);
+                    sink.key(1, out, velocity);
+                    if self.osc_enabled {
+                        let n = if self.osc_original { note } else { out };
+                        self.osc_on[n as usize] = true;
+                        sink.osc_note(n, true);
+                    }
+                }
+                Gen::Off { channel, note } => {
+                    let out = self.gen_held.note_off(channel, note, semitones);
+                    sink.midi(&[0x80 | channel, out, 0]);
+                    self.gen_release(sink, note, out);
+                }
+            }
+        }
+        self.gen_buf.clear();
+        let t = self.pattern.transport();
+        if t != self.last_transport {
+            self.last_transport = t;
+            sink.transport(t);
+        }
+    }
+
+    fn gen_release(&mut self, sink: &mut impl Sink, note: u8, out: u8) {
+        let o = out as usize;
+        self.out_count[o] = self.out_count[o].saturating_sub(1);
+        if self.out_count[o] == 0 {
+            sink.key(1, out, 0);
+        }
+        if self.osc_enabled {
+            let n = if self.osc_original { note } else { out };
+            self.osc_on[n as usize] = false;
+            sink.osc_note(n, false);
+        }
+    }
+
+    /// A clock message from any source.
+    pub fn clock(
+        &mut self,
+        sink: &mut impl Sink,
+        origin: ClockOrigin,
+        msg: ClockMsg,
+        semitones: i32,
+        now: Instant,
+    ) {
+        if !self.pattern.active() {
+            return;
+        }
+        self.pattern.clock(origin, msg, now, &mut self.gen_buf);
+        self.apply_gen(sink, semitones);
+    }
+
+    pub fn set_pattern(&mut self, sink: &mut impl Sink, settings: Arc<PatternSettings>, semitones: i32) {
+        self.pattern.set_settings(settings, &mut self.gen_buf);
+        self.apply_gen(sink, semitones);
+    }
+
+    pub fn seq_play(&mut self, sink: &mut impl Sink, on: bool, semitones: i32) {
+        self.pattern.play(on, &mut self.gen_buf);
+        self.apply_gen(sink, semitones);
+    }
+
     /// Process one incoming MIDI message.
     pub fn handle(&mut self, sink: &mut impl Sink, bytes: &[u8], semitones: i32) {
+        self.handle_at(sink, bytes, semitones, Instant::now());
+    }
+
+    /// Process one incoming MIDI message received at `now`.
+    pub fn handle_at(&mut self, sink: &mut impl Sink, bytes: &[u8], semitones: i32, now: Instant) {
         let Some(&status_byte) = bytes.first() else {
             return;
         };
@@ -126,6 +233,37 @@ impl Core {
                 if !(release && self.held.get(channel, note).is_some()) {
                     return;
                 }
+            }
+        }
+        if let Some(msg) = ClockMsg::parse(bytes) {
+            // MIDI clock from the input: forwarded as before, and drives the
+            // arpeggiator / sequencer when the input is the clock source.
+            sink.midi(bytes);
+            self.clock(sink, ClockOrigin::Input, msg, semitones, now);
+            return;
+        }
+        if self.pattern.active() && bytes.len() >= 2 && matches!(kind, 0x80 | 0x90 | 0xA0) {
+            let note = bytes[1] & 0x7F;
+            let velocity = bytes.get(2).copied().unwrap_or(0);
+            let pressed = kind == 0x90 && velocity > 0;
+            let released = kind == 0x80 || (kind == 0x90 && velocity == 0);
+            // A key that was already sounding before the pattern was switched on
+            // still ends normally (below).
+            if !(released && self.held.get(channel, note).is_some()) {
+                let i = note as usize;
+                if pressed {
+                    self.in_count[i] = self.in_count[i].saturating_add(1);
+                    sink.key(0, note, velocity);
+                    self.pattern.note(channel, note, velocity, true);
+                } else if released {
+                    self.in_count[i] = self.in_count[i].saturating_sub(1);
+                    if self.in_count[i] == 0 {
+                        sink.key(0, note, 0);
+                    }
+                    self.pattern.note(channel, note, 0, false);
+                }
+                // Polyphonic aftertouch has no matching note while a pattern plays.
+                return;
             }
         }
         if kind == 0xB0 && bytes.len() >= 3 && bytes[1] == 1 {
@@ -180,7 +318,7 @@ impl Core {
     /// Send Note Off for every held note without forgetting them (the keys are
     /// still physically down). Used before the output is replaced.
     pub fn silence_output(&self, sink: &mut impl Sink) {
-        for (channel, out) in self.held.held() {
+        for (channel, out) in self.held.held().into_iter().chain(self.gen_held.held()) {
             sink.midi(&[0x80 | channel, out, 0]);
         }
     }
@@ -211,8 +349,15 @@ impl Core {
     }
 
     pub fn panic(&mut self, sink: &mut impl Sink) {
-        for (channel, out) in self.held.drain() {
+        self.pattern.panic(&mut self.gen_buf);
+        self.gen_buf.clear();
+        for (channel, out) in self.held.drain().into_iter().chain(self.gen_held.drain()) {
             sink.midi(&[0x80 | channel, out, 0]);
+        }
+        let t = self.pattern.transport();
+        if t != self.last_transport {
+            self.last_transport = t;
+            sink.transport(t);
         }
         self.release_osc(sink);
         for note in 0..128u8 {
@@ -272,6 +417,11 @@ impl Sink for LiveSink<'_> {
     fn control(&mut self, generation: u64, event: ControlEvent) {
         let _ = self.cmd_tx.send(EngineCmd::MidiControl { generation, event });
     }
+
+    fn transport(&mut self, transport: Transport) {
+        self.shared.set_transport(transport);
+        self.keys_changed = true;
+    }
 }
 
 pub fn spawn(
@@ -297,6 +447,18 @@ pub fn spawn(
                     FwdMsg::Midi(bytes) => {
                         let semitones = shared.transpose.load(Ordering::Relaxed);
                         core.handle(&mut sink, bytes.as_slice(), semitones);
+                    }
+                    FwdMsg::Clock(origin, msg) => {
+                        let semitones = shared.transpose.load(Ordering::Relaxed);
+                        core.clock(&mut sink, origin, msg, semitones, Instant::now());
+                    }
+                    FwdMsg::SetPattern(settings) => {
+                        let semitones = shared.transpose.load(Ordering::Relaxed);
+                        core.set_pattern(&mut sink, settings, semitones);
+                    }
+                    FwdMsg::SeqPlay(on) => {
+                        let semitones = shared.transpose.load(Ordering::Relaxed);
+                        core.seq_play(&mut sink, on, semitones);
                     }
                     FwdMsg::SetOutput(new) => {
                         core.silence_output(&mut sink);
@@ -332,6 +494,7 @@ mod tests {
         pitch: u16,
         modw: u8,
         controls: Vec<ControlEvent>,
+        transport: Transport,
     }
 
     impl Default for Rec {
@@ -345,6 +508,7 @@ mod tests {
                 pitch: 8192,
                 modw: 0,
                 controls: Vec::new(),
+                transport: Transport::default(),
             }
         }
     }
@@ -374,6 +538,66 @@ mod tests {
         fn control(&mut self, _generation: u64, event: ControlEvent) {
             self.controls.push(event);
         }
+        fn transport(&mut self, transport: Transport) {
+            self.transport = transport;
+        }
+    }
+
+    fn arp_settings() -> Arc<PatternSettings> {
+        let mut s = PatternSettings {
+            mode: crate::project::PatternMode::Arp,
+            ..Default::default()
+        };
+        s.clock.internal_fallback = false;
+        Arc::new(s)
+    }
+
+    #[test]
+    fn arp_notes_are_transposed_shown_and_mirrored_to_osc() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.set_osc(&mut rec, true, false);
+        core.set_pattern(&mut rec, arp_settings(), 2);
+        let t0 = Instant::now();
+        core.handle_at(&mut rec, &[0x90, 60, 80], 2, t0);
+        assert!(rec.midi.is_empty(), "the key itself is not played");
+        assert!(rec.keys[0][60], "but shown as pressed");
+        core.handle_at(&mut rec, &[0xF8], 2, t0);
+        assert_eq!(
+            rec.midi,
+            [vec![0xF8], vec![0x90, 62, 80]],
+            "clock forwarded, arp note transposed"
+        );
+        assert!(rec.keys[1][62]);
+        assert_eq!(rec.osc, [(62, true)]);
+        // Transpose changes before the note ends: it still ends on 62.
+        for _ in 0..3 {
+            core.handle_at(&mut rec, &[0xF8], 7, t0);
+        }
+        assert!(rec.midi.contains(&vec![0x80, 62, 0]));
+        assert!(!rec.keys[1][62]);
+    }
+
+    #[test]
+    fn a_key_held_before_the_arp_started_still_ends() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.handle(&mut rec, &[0x90, 60, 80], 0);
+        core.set_pattern(&mut rec, arp_settings(), 0);
+        core.handle(&mut rec, &[0x80, 60, 0], 0);
+        assert_eq!(rec.midi, [vec![0x90, 60, 80], vec![0x80, 60, 0]]);
+    }
+
+    #[test]
+    fn panic_stops_arp_notes() {
+        let (mut core, mut rec) = (Core::default(), Rec::default());
+        core.set_pattern(&mut rec, arp_settings(), 0);
+        core.handle(&mut rec, &[0x90, 60, 80], 0);
+        core.handle(&mut rec, &[0xF8], 0);
+        rec.midi.clear();
+        core.panic(&mut rec);
+        assert!(rec.midi.contains(&vec![0x80, 60, 0]));
+        // Released keys no longer arpeggiate.
+        core.handle(&mut rec, &[0xF8], 0);
+        assert!(!rec.midi.iter().any(|m| m[0] == 0x90));
     }
 
     fn note_mapping(number: u8, forward: bool) -> Arc<[Mapping]> {

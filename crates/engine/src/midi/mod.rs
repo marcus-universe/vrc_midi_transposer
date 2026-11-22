@@ -1,8 +1,10 @@
 //! MIDI: port discovery, the transposing forwarder and held-note tracking.
 
+pub mod clock;
 pub mod forwarder;
 pub mod held_notes;
 pub mod mapping;
+pub mod pattern;
 pub mod ports;
 
 /// Client name shown to the OS. Ports carrying it are our own and are hidden from the pickers.

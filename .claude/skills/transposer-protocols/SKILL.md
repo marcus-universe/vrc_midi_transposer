@@ -144,3 +144,22 @@ JSON, one file per project in `<data dir>/projects/<id>.json`. `schema` is `1`. 
 - A MIDI port reference is resolved by `id`, then exact `name`, then `name` as a substring (this is how imported `config.json` files match).
 - `osc.sending_enabled`, `osc.send_original` and `debug` are the values applied when the project is opened.
 - The legacy `config.json` format (v1.x) is imported by `project::legacy`; keep that importer working.
+
+### Arpeggiator and sequencer (`pattern`)
+
+Optional section, defaults when missing:
+
+```json
+"pattern": {
+  "mode": "off",                       // "off" | "arp" | "seq"
+  "clock": { "source": "input", "device": null, "internal_fallback": true, "bpm": 120 },
+  "arp": { "style": "up", "rate": "1/16", "octaves": 1, "gate": 50, "swing": 0, "latch": false, "velocity": null },
+  "seq": { "rate": "1/16", "length": 16, "root": 48, "swing": 0, "channel": 1, "follow_transport": true,
+           "steps": [ { "on": true, "offset": 0, "velocity": 100, "gate": 50, "tie": false } ] }
+}
+```
+
+- Clock: MIDI clock (24 ticks per quarter, Start/Stop/Continue/Song Position) from the MIDI input (`source: input`) or from another device (`source: device`, `device` is a port reference). With `internal_fallback` the app's own tempo (`bpm`) plays while no MIDI clock arrives (500 ms timeout).
+- Styles: `up`, `down`, `up_down`, `down_up`, `up_down_inclusive`, `played`, `reverse`, `random`, `chord`. Rates: `1/1 1/2 1/2T 1/4D 1/4 1/4T 1/8D 1/8 1/8T 1/16D 1/16 1/16T 1/32 1/32T`. Bars are 4/4.
+- While a mode is on, played keys do not sound themselves: the arpeggiator plays the held keys, the sequencer plays its steps relative to the last held key (or `root`). Generated notes are transposed and go to the MIDI output, the keyboard display (output half) and OSC.
+- The sequencer's Play waits for the next bar line of the clock; with `follow_transport` a MIDI Start starts it at once and MIDI Stop stops it.

@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::pattern::PatternSettings;
+
 pub const SCHEMA: u32 = 1;
 
 /// Reference to a MIDI port. Resolved by id, then exact name, then substring.
@@ -248,6 +250,8 @@ pub struct Project {
     pub transpose: TransposeRange,
     /// Applied when the project is opened.
     pub debug: bool,
+    /// Arpeggiator / sequencer and their clock.
+    pub pattern: PatternSettings,
 }
 
 impl Default for Project {
@@ -261,6 +265,7 @@ impl Default for Project {
             mqtt: MqttSettings::default(),
             transpose: TransposeRange::default(),
             debug: false,
+            pattern: PatternSettings::default(),
         }
     }
 }
@@ -277,6 +282,7 @@ impl Project {
     /// comes from a file or the UI.
     pub fn normalized(mut self) -> Self {
         self.schema = SCHEMA;
+        self.pattern.normalize();
         if self.name.trim().is_empty() {
             self.name = "Untitled".into();
         }

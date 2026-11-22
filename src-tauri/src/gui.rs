@@ -21,7 +21,9 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use transposer_engine::headless::{documents_dir, legacy_config_dirs};
 use transposer_engine::project::{file_name_for, is_project_path, Project, RecentFile, Store, EXTENSION};
-use transposer_engine::{info, Engine, EngineCmd, EngineEvent, Level, LogLine, Snapshot, Source};
+use transposer_engine::{
+    info, ClockState, Engine, EngineCmd, EngineEvent, Level, LogLine, Snapshot, Source, Transport,
+};
 
 /// Events are collected for this long before one frame is sent to the webview.
 const COALESCE: Duration = Duration::from_millis(12);
@@ -48,6 +50,39 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Arpeggiator / sequencer state as the webview sees it.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct TransportView {
+    /// `none`, `external` or `internal`.
+    clock: &'static str,
+    /// Beats per minute; 0 while unknown.
+    bpm: f32,
+    /// Beat in the bar, 0-3.
+    beat: u8,
+    playing: bool,
+    /// Waiting for the next bar to start.
+    armed: bool,
+    /// Current sequencer step, -1 when not playing.
+    step: i16,
+}
+
+impl From<Transport> for TransportView {
+    fn from(t: Transport) -> Self {
+        TransportView {
+            clock: match t.clock {
+                ClockState::None => "none",
+                ClockState::External => "external",
+                ClockState::Internal => "internal",
+            },
+            bpm: t.bpm_x10 as f32 / 10.0,
+            beat: t.beat,
+            playing: t.playing,
+            armed: t.armed,
+            step: t.step,
+        }
+    }
+}
+
 /// Coalesced update for the webview. Full state, never a delta (except `logs`).
 #[derive(Clone, Default, Serialize)]
 pub struct Frame {
@@ -63,6 +98,9 @@ pub struct Frame {
     /// `[pitch bend 0..=16383, mod wheel 0..=127]`. Sent together with `keys`.
     #[serde(skip_serializing_if = "Option::is_none")]
     wheels: Option<[u16; 2]>,
+    /// Arpeggiator / sequencer state. Sent together with `keys`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport: Option<TransportView>,
     #[serde(skip_serializing_if = "is_false")]
     cleared: bool,
     #[serde(skip_serializing_if = "is_false")]
@@ -194,6 +232,7 @@ pub struct Init {
     keys: [u32; 8],
     vel: Vec<u8>,
     wheels: [u16; 2],
+    transport: TransportView,
 }
 
 #[derive(Deserialize)]
@@ -223,6 +262,10 @@ pub enum UiCmd {
     /// MIDI Learn for a custom control; `index: null` cancels.
     MidiLearn {
         index: Option<usize>,
+    },
+    /// Start (on the next bar) or stop the sequencer.
+    SeqPlay {
+        on: bool,
     },
 }
 
@@ -380,21 +423,27 @@ impl AppState {
         }
     }
 
-    /// Pressed keys, their velocities and the wheels, read together.
-    fn visual(&self) -> ([u32; 8], Vec<u8>, [u16; 2]) {
+    /// Pressed keys, their velocities, the wheels and the transport, read together.
+    fn visual(&self) -> ([u32; 8], Vec<u8>, [u16; 2], TransportView) {
         let keys = self.engine.take_keys();
-        (keys, self.engine.velocities(&keys), self.engine.wheels())
+        (
+            keys,
+            self.engine.velocities(&keys),
+            self.engine.wheels(),
+            TransportView::from(self.engine.transport()),
+        )
     }
 
     /// Everything, for a webview that just became visible again.
     fn full_frame(&self) -> Frame {
-        let (keys, vel, wheels) = self.visual();
+        let (keys, vel, wheels, transport) = self.visual();
         Frame {
             snap: Some(self.engine.snapshot()),
             logs: self.engine.logs(),
             keys: Some(keys),
             vel: Some(vel),
             wheels: Some(wheels),
+            transport: Some(transport),
             cleared: true,
             close_requested: false,
             open_pending: false,
@@ -550,10 +599,11 @@ fn pump(app: AppHandle, events: Receiver<EngineEvent>) {
             frame.snap = Some(state.engine.snapshot());
         }
         if want_keys {
-            let (keys, vel, wheels) = state.visual();
+            let (keys, vel, wheels, transport) = state.visual();
             frame.keys = Some(keys);
             frame.vel = Some(vel);
             frame.wheels = Some(wheels);
+            frame.transport = Some(transport);
         }
         state.send(frame);
     }
@@ -569,7 +619,7 @@ fn subscribe(state: State<AppState>, channel: Channel<Frame>) -> Init {
     state.visible.store(true, Ordering::Relaxed);
     state.stale.store(false, Ordering::Relaxed);
     let work = lock(&state.work);
-    let (keys, vel, wheels) = state.visual();
+    let (keys, vel, wheels, transport) = state.visual();
     Init {
         state: state.project_state(&work),
         app: AppInfo {
@@ -590,6 +640,7 @@ fn subscribe(state: State<AppState>, channel: Channel<Frame>) -> Init {
         keys,
         vel,
         wheels,
+        transport,
     }
 }
 
@@ -617,6 +668,7 @@ fn engine_cmd(state: State<AppState>, cmd: UiCmd) {
         UiCmd::RefreshPorts => EngineCmd::RefreshPorts,
         UiCmd::Panic => EngineCmd::Panic,
         UiCmd::MidiLearn { index } => EngineCmd::MidiLearn(index),
+        UiCmd::SeqPlay { on } => EngineCmd::SeqPlay(on),
     });
 }
 

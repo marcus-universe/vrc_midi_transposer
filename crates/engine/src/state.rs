@@ -8,7 +8,37 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::midi::pattern::{ClockState, Transport};
 use crate::project::{MidiTrigger, Project};
+
+fn pack_transport(t: &Transport) -> u64 {
+    let clock = match t.clock {
+        ClockState::None => 0u64,
+        ClockState::External => 1,
+        ClockState::Internal => 2,
+    };
+    clock
+        | (t.bpm_x10 as u64) << 2
+        | (t.beat as u64 & 3) << 18
+        | (t.playing as u64) << 20
+        | (t.armed as u64) << 21
+        | ((t.step + 1) as u16 as u64) << 22
+}
+
+fn unpack_transport(v: u64) -> Transport {
+    Transport {
+        clock: match v & 3 {
+            1 => ClockState::External,
+            2 => ClockState::Internal,
+            _ => ClockState::None,
+        },
+        bpm_x10: (v >> 2) as u16,
+        beat: ((v >> 18) & 3) as u8,
+        playing: (v >> 20) & 1 == 1,
+        armed: (v >> 21) & 1 == 1,
+        step: ((v >> 22) as u16) as i16 - 1,
+    }
+}
 
 /// Pitch bend value of a centred wheel.
 pub const PITCH_CENTRE: u16 = 8192;
@@ -157,6 +187,8 @@ pub struct Snapshot {
     pub outputs: Vec<PortInfo>,
     pub midi_in: MidiStatus,
     pub midi_out: MidiStatus,
+    /// The separate MIDI clock device, when the clock source is a device.
+    pub clock_device: MidiStatus,
     pub osc_listener: ListenerStatus,
     pub osc_target: String,
     pub mqtt: MqttStatus,
@@ -196,6 +228,8 @@ pub struct Shared {
     pitch: AtomicU16,
     /// Last mod wheel (CC 1) value from any channel.
     modw: AtomicU8,
+    /// Arpeggiator / sequencer display state, packed (see `set_transport`).
+    transport: std::sync::atomic::AtomicU64,
     keys_dirty: AtomicBool,
     events: Sender<EngineEvent>,
     log: Mutex<LogBuf>,
@@ -212,6 +246,7 @@ impl Shared {
             vel: std::array::from_fn(|_| AtomicU8::new(0)),
             pitch: AtomicU16::new(PITCH_CENTRE),
             modw: AtomicU8::new(0),
+            transport: std::sync::atomic::AtomicU64::new(pack_transport(&Transport::default())),
             keys_dirty: AtomicBool::new(false),
             events,
             log: Mutex::new(LogBuf {
@@ -324,6 +359,14 @@ impl Shared {
         self.modw.store(value & 0x7F, Ordering::Relaxed);
     }
 
+    pub fn set_transport(&self, t: Transport) {
+        self.transport.store(pack_transport(&t), Ordering::Relaxed);
+    }
+
+    pub fn transport(&self) -> Transport {
+        unpack_transport(self.transport.load(Ordering::Relaxed))
+    }
+
     /// `[pitch bend 0..=16383, mod wheel 0..=127]`.
     pub fn wheels(&self) -> [u16; 2] {
         [
@@ -383,5 +426,27 @@ mod tests {
         let keys = shared.keys();
         assert_eq!(shared.velocities(&keys), [100, 90]);
         assert_eq!(shared.wheels(), [PITCH_CENTRE, 0]);
+    }
+
+    #[test]
+    fn transport_round_trips() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let shared = Shared::new(tx, Arc::new(Project::default()));
+        let t = Transport {
+            clock: ClockState::Internal,
+            bpm_x10: 1205,
+            beat: 3,
+            playing: true,
+            armed: false,
+            step: 63,
+        };
+        shared.set_transport(t);
+        assert_eq!(shared.transport(), t);
+        let idle = Transport {
+            step: -1,
+            ..Transport::default()
+        };
+        shared.set_transport(idle);
+        assert_eq!(shared.transport(), idle);
     }
 }

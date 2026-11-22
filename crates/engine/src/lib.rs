@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 pub use midi::mapping::ControlEvent;
+pub use midi::pattern::{ClockState, Transport};
 pub use mqtt::MqttEvent;
 pub use project::{Project, Store};
 pub use state::{EngineEvent, Level, LogLine, Snapshot};
@@ -55,6 +56,8 @@ pub enum EngineCmd {
     /// MIDI Learn for custom control `index`: the next Note On, CC or Program
     /// Change becomes its trigger (reported in `Snapshot::learned`). `None` cancels.
     MidiLearn(Option<usize>),
+    /// Start (on the next bar of the clock) or stop the sequencer.
+    SeqPlay(bool),
     /// Run a console command line.
     Console(String),
     /// Add a line to the log.
@@ -136,6 +139,11 @@ impl Engine {
     /// Velocities of the pressed keys in `keys`, in bit order (input words first).
     pub fn velocities(&self, keys: &[u32; 8]) -> Vec<u8> {
         self.shared.velocities(keys)
+    }
+
+    /// Arpeggiator / sequencer state for the display.
+    pub fn transport(&self) -> Transport {
+        self.shared.transport()
     }
 
     /// `[pitch bend 0..=16383 (8192 = centre), mod wheel 0..=127]`.

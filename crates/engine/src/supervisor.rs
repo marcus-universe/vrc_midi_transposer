@@ -13,8 +13,10 @@ use midir::MidiInputConnection;
 use rosc::OscType;
 
 use crate::command::{self, Command};
+use crate::midi::clock::InternalClock;
 use crate::midi::forwarder::{self, FwdMsg};
 use crate::midi::mapping::{ControlEvent, Mapping};
+use crate::midi::pattern::{ClockMsg, ClockOrigin};
 use crate::midi::ports::{self, Scanner};
 use crate::midi::MidiBytes;
 use crate::mqtt::topics::custom_payload;
@@ -48,6 +50,10 @@ pub(crate) struct Supervisor {
     inputs: Vec<PortInfo>,
     outputs: Vec<PortInfo>,
     conn_in: Option<(MidiInputConnection<()>, PortInfo)>,
+    /// Separate MIDI clock device (pattern clock source "device").
+    conn_clock: Option<(MidiInputConnection<()>, PortInfo)>,
+    clock_error: String,
+    internal_clock: Option<InternalClock>,
     conn_out: Option<PortInfo>,
     in_error: String,
     out_error: String,
@@ -91,6 +97,9 @@ impl Supervisor {
             inputs: Vec::new(),
             outputs: Vec::new(),
             conn_in: None,
+            conn_clock: None,
+            clock_error: String::new(),
+            internal_clock: None,
             conn_out: None,
             in_error: String::new(),
             out_error: String::new(),
@@ -148,6 +157,9 @@ impl Supervisor {
             EngineCmd::SetMqttEnabled(on) => self.set_mqtt_enabled(on),
             EngineCmd::CustomOsc { index, value, source } => self.custom_osc(index, value, source),
             EngineCmd::MidiLearn(index) => self.midi_learn(index),
+            EngineCmd::SeqPlay(on) => {
+                let _ = self.fwd_tx.send(FwdMsg::SeqPlay(on));
+            }
             EngineCmd::MidiControl { generation, event } => {
                 if generation == self.mapping_generation {
                     self.midi_control(event);
@@ -441,6 +453,36 @@ impl Supervisor {
         if load || old.midi.input != new.midi.input {
             self.disconnect_input();
             self.in_error.clear();
+        }
+
+        // Arpeggiator / sequencer and their clock.
+        if load || old.pattern != new.pattern {
+            let _ = self
+                .fwd_tx
+                .send(FwdMsg::SetPattern(Arc::new(new.pattern.clone())));
+        }
+        let wants_internal = new.pattern.mode != crate::project::PatternMode::Off;
+        match (&self.internal_clock, wants_internal) {
+            (Some(clock), true) => clock.set_bpm(new.pattern.clock.bpm),
+            (None, true) => {
+                // Runs whenever a pattern mode is on: the ticks either play
+                // (fallback) or just keep the clock display up to date.
+                self.internal_clock = Some(InternalClock::start(new.pattern.clock.bpm, self.fwd_tx.clone()));
+            }
+            (Some(_), false) => {
+                if let Some(clock) = self.internal_clock.take() {
+                    clock.stop();
+                }
+            }
+            (None, false) => {}
+        }
+        if load
+            || old.pattern.clock.device != new.pattern.clock.device
+            || old.pattern.clock.source != new.pattern.clock.source
+            || old.pattern.mode != new.pattern.mode
+        {
+            self.conn_clock = None;
+            self.clock_error.clear();
         }
         if load || old.midi.output != new.midi.output {
             self.disconnect_output();
@@ -785,6 +827,55 @@ impl Supervisor {
             }
         }
 
+        // Clock device: only while a pattern mode uses it.
+        let clock_wanted = (project.pattern.mode != crate::project::PatternMode::Off
+            && project.pattern.clock.source == crate::project::ClockSource::Device)
+            .then_some(project.pattern.clock.device.as_ref())
+            .flatten();
+        if let Some((_, port)) = &self.conn_clock {
+            if clock_wanted.is_none() || !self.inputs.contains(port) {
+                self.conn_clock = None;
+            }
+        }
+        if self.conn_clock.is_none() {
+            if let Some(index) = clock_wanted.and_then(|want| ports::resolve(&self.inputs, want, None)) {
+                let port = self.inputs[index].clone();
+                if self.conn_in.as_ref().is_some_and(|(_, p)| p.id == port.id) {
+                    let err = "This device is already the MIDI input; choose the MIDI input as clock source."
+                        .to_string();
+                    if self.clock_error != err {
+                        self.shared.warn(format!("[CLOCK] {err}"));
+                        self.clock_error = err;
+                    }
+                } else {
+                    let tx = self.fwd_tx.clone();
+                    let result = ports::open_input(&port, move |bytes| {
+                        // Only the clock is used from this device.
+                        if let Some(msg) = ClockMsg::parse(bytes) {
+                            let _ = tx.send(FwdMsg::Clock(ClockOrigin::Device, msg));
+                        }
+                    });
+                    match result {
+                        Ok(conn) => {
+                            self.shared
+                                .log(Level::Success, format!("[CLOCK] Clock device: {}", port.name));
+                            self.clock_error.clear();
+                            self.conn_clock = Some((conn, port));
+                        }
+                        Err(err) => {
+                            if self.clock_error != err {
+                                self.shared.error(format!(
+                                    "[CLOCK] Cannot open clock device '{}': {err}",
+                                    port.name
+                                ));
+                                self.clock_error = err;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         self.publish_midi_status();
     }
 
@@ -824,9 +915,19 @@ impl Supervisor {
             self.conn_out.as_ref(),
             &self.out_error,
         );
+        let clock_wanted = (self.project.pattern.mode != crate::project::PatternMode::Off
+            && self.project.pattern.clock.source == crate::project::ClockSource::Device)
+            .then_some(self.project.pattern.clock.device.as_ref())
+            .flatten();
+        let clock_device = status(
+            clock_wanted,
+            self.conn_clock.as_ref().map(|(_, p)| p),
+            &self.clock_error,
+        );
         self.shared.update(|s| {
             s.midi_in = midi_in;
             s.midi_out = midi_out;
+            s.clock_device = clock_device;
         });
     }
 
@@ -865,6 +966,10 @@ impl Supervisor {
         self.shared
             .debug_log(|| "[SHUTDOWN] Stopping services".to_string());
         self.conn_in = None;
+        self.conn_clock = None;
+        if let Some(clock) = self.internal_clock.take() {
+            clock.stop();
+        }
         let _ = self.fwd_tx.send(FwdMsg::Stop);
         if let Some(join) = self.fwd_join.take() {
             let _ = join.join();
